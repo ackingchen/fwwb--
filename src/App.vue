@@ -10,7 +10,7 @@ const dataStore = useDataStore();
 const { summary } = storeToRefs(dataStore);
 
 const headerRef = ref(null);
-const contentPaddingTop = ref('112px'); // Default fallback
+const contentPaddingTop = ref("112px"); // Default fallback
 
 const tabs = [
   { key: "dashboard", label: "大屏", icon: "screen", path: "/dashboard" },
@@ -37,22 +37,22 @@ function updatePadding() {
 
 onMounted(() => {
   updatePadding();
-  
+
   if (headerRef.value) {
     resizeObserver = new ResizeObserver(() => {
       updatePadding();
     });
     resizeObserver.observe(headerRef.value);
   }
-  
-  window.addEventListener('resize', updatePadding);
+
+  window.addEventListener("resize", updatePadding);
 });
 
 onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect();
   }
-  window.removeEventListener('resize', updatePadding);
+  window.removeEventListener("resize", updatePadding);
 });
 </script>
 

@@ -1,10 +1,20 @@
 <script setup>
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useDataStore } from "../stores/useDataStore";
 import { storeToRefs } from "pinia";
+import * as echarts from "echarts";
 
 const dataStore = useDataStore();
 const { summary, series } = storeToRefs(dataStore);
+
+const chartPalette = [
+  "#4f95ff",
+  "#61d9e8",
+  "#41d98f",
+  "#f6cf68",
+  "#ff7b7b",
+  "#a56af5",
+];
 
 const coreMetrics = computed(() => [
   {
@@ -53,43 +63,394 @@ const coreMetrics = computed(() => [
   { label: "Miss Rate", value: `${summary.value.missRate}%`, note: "漏检率" },
 ]);
 
-const buildNormalizedPath = (values, width, height) => {
-  if (!values.length) return "";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  return values
-    .map((value, index) => {
-      const x = (index / (values.length - 1 || 1)) * width;
-      const y = height - ((value - min) / span) * height;
-      return `${index === 0 ? "M" : "L"} ${x} ${y}`;
-    })
-    .join(" ");
+const cloneSeries = (data) => JSON.parse(JSON.stringify(data));
+const localSeries = ref(cloneSeries(series.value));
+const lastUpdated = ref(new Date());
+const refreshKey = ref(0);
+
+const pageIndex = ref(0);
+const pageSize = 4;
+const totalPages = computed(() =>
+  Math.ceil(localSeries.value.hourlyQuality.length / pageSize),
+);
+
+const pagedHourly = computed(() => {
+  const start = pageIndex.value * pageSize;
+  return localSeries.value.hourlyQuality.slice(start, start + pageSize);
+});
+
+const refreshMetrics = () => {
+  const next = cloneSeries(series.value);
+  next.fpsTrend = next.fpsTrend.map((value) =>
+    Math.max(0, +(value * (0.96 + Math.random() * 0.08)).toFixed(1)),
+  );
+  next.latencyTrend = next.latencyTrend.map((value) =>
+    Math.max(0, +(value * (0.96 + Math.random() * 0.08)).toFixed(1)),
+  );
+  next.hourlyQuality = next.hourlyQuality.map((item) => ({
+    ...item,
+    targets: Math.max(
+      0,
+      Math.round(item.targets * (0.94 + Math.random() * 0.12)),
+    ),
+    warnings: Math.max(
+      0,
+      Math.round(item.warnings * (0.92 + Math.random() * 0.16)),
+    ),
+    avgScore: Math.max(
+      0,
+      Math.min(
+        100,
+        +(item.avgScore * (0.97 + Math.random() * 0.06)).toFixed(1),
+      ),
+    ),
+  }));
+  localSeries.value = next;
+  lastUpdated.value = new Date();
+  refreshKey.value += 1;
 };
 
-const buildPrPath = (points, width, height) =>
-  points
-    .map(
-      ([x, y], index) =>
-        `${index === 0 ? "M" : "L"} ${x * width} ${(1 - y) * height}`,
-    )
-    .join(" ");
+const nextPage = () => {
+  if (pageIndex.value < totalPages.value - 1) pageIndex.value += 1;
+};
 
-const prPath = computed(() => buildPrPath(series.value.prCurve, 320, 180));
-const fpsPath = computed(() =>
-  buildNormalizedPath(series.value.fpsTrend, 320, 96),
-);
-const latencyPath = computed(() =>
-  buildNormalizedPath(series.value.latencyTrend, 320, 96),
+const prevPage = () => {
+  if (pageIndex.value > 0) pageIndex.value -= 1;
+};
+
+const lastUpdatedText = computed(
+  () =>
+    `${lastUpdated.value.toLocaleDateString()} ${lastUpdated.value.toLocaleTimeString()}`,
 );
 
-const classBest = computed(
-  () => [...series.value.classes].sort((a, b) => b.value - a.value)[0],
+const classPieRef = ref(null);
+const sceneFunnelRef = ref(null);
+const prLineRef = ref(null);
+const iouLineRef = ref(null);
+const confidenceLineRef = ref(null);
+const performanceLineRef = ref(null);
+const hourlyBarRef = ref(null);
+
+const chartMap = new Map();
+
+const initChart = (key, el) => {
+  if (!el || chartMap.has(key)) return;
+  chartMap.set(key, echarts.init(el, null, { renderer: "svg" }));
+};
+
+const resizeCharts = () => {
+  chartMap.forEach((chart) => chart.resize());
+};
+
+const downloadFile = (url, filename) => {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+};
+
+const svgToPng = (svgUrl) =>
+  new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(image, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    image.src = svgUrl;
+  });
+
+const exportChart = async (key, type) => {
+  const chart = chartMap.get(key);
+  if (!chart) return;
+  const svgData = chart.getDataURL({ type: "svg" });
+  if (type === "svg") {
+    downloadFile(svgData, `${key}.svg`);
+    return;
+  }
+  if (type === "png") {
+    const pngData = await svgToPng(svgData);
+    downloadFile(pngData, `${key}.png`);
+    return;
+  }
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) return;
+  printWindow.document.write(
+    `<img src="${svgData}" style="width:100%;height:auto;" />`,
+  );
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
+};
+
+const buildChartOptions = () => {
+  const classes = localSeries.value.classes;
+  const scenes = localSeries.value.sceneComparison;
+  const prCurve = localSeries.value.prCurve;
+  const iouMetrics = localSeries.value.iouMetrics;
+  const confidenceBands = localSeries.value.confidenceBands;
+  const fpsTrend = localSeries.value.fpsTrend;
+  const latencyTrend = localSeries.value.latencyTrend;
+  const hourlyQuality = pagedHourly.value;
+
+  const classPieOption = {
+    color: chartPalette,
+    tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+    legend: {
+      bottom: 0,
+      textStyle: { color: "#9cb6db" },
+    },
+    series: [
+      {
+        type: "pie",
+        radius: ["40%", "70%"],
+        center: ["50%", "45%"],
+        label: { color: "#eef5ff", formatter: "{b}\n{d}%" },
+        data: classes.map((item) => ({ name: item.name, value: item.value })),
+      },
+    ],
+  };
+
+  const sceneFunnelOption = {
+    color: chartPalette,
+    tooltip: { trigger: "item", formatter: "{b}: {c}%" },
+    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    series: [
+      {
+        type: "funnel",
+        sort: "descending",
+        label: { color: "#eef5ff" },
+        data: scenes.map((item) => ({
+          name: item.scene,
+          value: item.map50,
+        })),
+      },
+    ],
+  };
+
+  const prLineOption = {
+    color: ["#61d9e8"],
+    tooltip: { trigger: "axis" },
+    xAxis: {
+      type: "value",
+      name: "Recall",
+      min: 0,
+      max: 1,
+      axisLabel: { color: "#9cb6db" },
+    },
+    yAxis: {
+      type: "value",
+      name: "Precision",
+      min: 0,
+      max: 1,
+      axisLabel: { color: "#9cb6db" },
+    },
+    series: [
+      {
+        type: "line",
+        smooth: true,
+        symbolSize: 6,
+        data: prCurve.map(([x, y]) => [x, y]),
+      },
+    ],
+  };
+
+  const iouLineOption = {
+    color: ["#4f95ff", "#61d9e8", "#f6cf68"],
+    tooltip: { trigger: "axis" },
+    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    xAxis: {
+      type: "category",
+      data: iouMetrics.map((item) => item.iou),
+      axisLabel: { color: "#9cb6db" },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#9cb6db" },
+    },
+    series: [
+      {
+        name: "mAP",
+        type: "line",
+        smooth: true,
+        data: iouMetrics.map((item) => item.map),
+      },
+      {
+        name: "Precision",
+        type: "line",
+        smooth: true,
+        data: iouMetrics.map((item) => item.precision),
+      },
+      {
+        name: "Recall",
+        type: "line",
+        smooth: true,
+        data: iouMetrics.map((item) => item.recall),
+      },
+    ],
+  };
+
+  const confidenceLineOption = {
+    color: ["#41d98f", "#ff7b7b", "#f6cf68"],
+    tooltip: { trigger: "axis" },
+    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    xAxis: {
+      type: "category",
+      data: confidenceBands.map((item) => item.threshold),
+      axisLabel: { color: "#9cb6db" },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#9cb6db" },
+    },
+    series: [
+      {
+        name: "Precision",
+        type: "line",
+        smooth: true,
+        data: confidenceBands.map((item) => item.precision),
+      },
+      {
+        name: "Recall",
+        type: "line",
+        smooth: true,
+        data: confidenceBands.map((item) => item.recall),
+      },
+      {
+        name: "F1",
+        type: "line",
+        smooth: true,
+        data: confidenceBands.map((item) => item.f1),
+      },
+    ],
+  };
+
+  const performanceLineOption = {
+    color: ["#61d9e8", "#f6cf68"],
+    tooltip: { trigger: "axis" },
+    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    xAxis: {
+      type: "category",
+      data: fpsTrend.map((_, index) => `T${index + 1}`),
+      axisLabel: { color: "#9cb6db" },
+    },
+    yAxis: [
+      {
+        type: "value",
+        name: "FPS",
+        axisLabel: { color: "#9cb6db" },
+      },
+      {
+        type: "value",
+        name: "Latency",
+        axisLabel: { color: "#9cb6db" },
+      },
+    ],
+    series: [
+      {
+        name: "FPS",
+        type: "line",
+        smooth: true,
+        data: fpsTrend,
+      },
+      {
+        name: "Latency",
+        type: "line",
+        smooth: true,
+        yAxisIndex: 1,
+        data: latencyTrend,
+      },
+    ],
+  };
+
+  const hourlyBarOption = {
+    color: ["#4f95ff", "#ff7b7b", "#41d98f"],
+    tooltip: { trigger: "axis" },
+    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    xAxis: {
+      type: "category",
+      data: hourlyQuality.map((item) => item.period),
+      axisLabel: { color: "#9cb6db", rotate: 30 },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#9cb6db" },
+    },
+    series: [
+      {
+        name: "检测目标",
+        type: "bar",
+        label: { show: true, position: "top", color: "#9cb6db", fontSize: 10 },
+        data: hourlyQuality.map((item) => item.targets),
+      },
+      {
+        name: "告警数",
+        type: "bar",
+        label: { show: true, position: "top", color: "#9cb6db", fontSize: 10 },
+        data: hourlyQuality.map((item) => item.warnings),
+      },
+      {
+        name: "mAP@0.5",
+        type: "line",
+        smooth: true,
+        data: hourlyQuality.map((item) => item.map50),
+      },
+    ],
+  };
+
+  return {
+    classPieOption,
+    sceneFunnelOption,
+    prLineOption,
+    iouLineOption,
+    confidenceLineOption,
+    performanceLineOption,
+    hourlyBarOption,
+  };
+};
+
+const updateCharts = () => {
+  const options = buildChartOptions();
+  chartMap.get("classPie")?.setOption(options.classPieOption);
+  chartMap.get("sceneFunnel")?.setOption(options.sceneFunnelOption);
+  chartMap.get("prLine")?.setOption(options.prLineOption);
+  chartMap.get("iouLine")?.setOption(options.iouLineOption);
+  chartMap.get("confidenceLine")?.setOption(options.confidenceLineOption);
+  chartMap.get("performanceLine")?.setOption(options.performanceLineOption);
+  chartMap.get("hourlyBar")?.setOption(options.hourlyBarOption);
+};
+
+onMounted(() => {
+  initChart("classPie", classPieRef.value);
+  initChart("sceneFunnel", sceneFunnelRef.value);
+  initChart("prLine", prLineRef.value);
+  initChart("iouLine", iouLineRef.value);
+  initChart("confidenceLine", confidenceLineRef.value);
+  initChart("performanceLine", performanceLineRef.value);
+  initChart("hourlyBar", hourlyBarRef.value);
+  updateCharts();
+  window.addEventListener("resize", resizeCharts);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", resizeCharts);
+  chartMap.forEach((chart) => chart.dispose());
+  chartMap.clear();
+});
+
+watch(
+  series,
+  () => {
+    localSeries.value = cloneSeries(series.value);
+    updateCharts();
+  },
+  { deep: true },
 );
 
-const sceneWeakest = computed(
-  () => [...series.value.sceneComparison].sort((a, b) => a.map50 - b.map50)[0],
-);
+watch([refreshKey, pageIndex], updateCharts);
 </script>
 
 <template>
@@ -97,6 +458,10 @@ const sceneWeakest = computed(
     <div class="panel metrics-panel-wide">
       <div class="panel-header">
         <h3>核心指标总览</h3>
+        <div class="panel-actions">
+          <span class="update-time">更新 {{ lastUpdatedText }}</span>
+          <button class="ghost-btn" @click="refreshMetrics">刷新数据</button>
+        </div>
       </div>
       <div class="detailed-stat-grid">
         <div
@@ -136,166 +501,161 @@ const sceneWeakest = computed(
     <div class="panel">
       <div class="panel-header">
         <h3>类别表现与误差分析</h3>
-      </div>
-      <div class="class-detail-list">
-        <div
-          v-for="item in series.classes"
-          :key="item.name"
-          class="class-detail-row"
-        >
-          <div class="class-row-header">
-            <h4>{{ item.name }}</h4>
-            <strong>{{ item.value }}%</strong>
-          </div>
-          <div class="bar-track">
-            <div class="bar-fill" :style="{ width: `${item.value}%` }"></div>
-          </div>
-          <div class="class-meta-grid">
-            <span>P: {{ item.precision }}%</span>
-            <span>R: {{ item.recall }}%</span>
-            <span>F1: {{ item.f1 }}%</span>
-            <span>样本: {{ item.support }}</span>
-            <span>漏检: {{ item.missRate }}%</span>
-            <span>误报: {{ item.falseAlarm }}%</span>
-          </div>
+        <div class="panel-actions">
+          <button class="ghost-btn" @click="exportChart('classPie', 'png')">
+            PNG
+          </button>
+          <button class="ghost-btn" @click="exportChart('classPie', 'svg')">
+            SVG
+          </button>
+          <button class="ghost-btn" @click="exportChart('classPie', 'pdf')">
+            PDF
+          </button>
         </div>
       </div>
-      <div class="analysis-footer">
-        <span>最佳类别：{{ classBest?.name }}</span>
-        <strong>AP {{ classBest?.value }}%</strong>
-      </div>
+      <div class="chart-canvas" ref="classPieRef"></div>
     </div>
 
     <div class="panel">
       <div class="panel-header">
         <h3>多场景鲁棒性对比</h3>
-      </div>
-      <div class="scene-compare-list">
-        <div
-          v-for="item in series.sceneComparison"
-          :key="item.scene"
-          class="scene-rich-card"
-        >
-          <div class="scene-rich-title">
-            <h4>{{ item.scene }}</h4>
-            <strong>mAP {{ item.map50 }}%</strong>
-          </div>
-          <div class="scene-rich-grid">
-            <span>Precision {{ item.precision }}%</span>
-            <span>Recall {{ item.recall }}%</span>
-            <span>FPS {{ item.fps }}</span>
-            <span>Latency {{ item.latency }}ms</span>
-            <span>告警率 {{ item.warningRate }}%</span>
-            <span>样本 {{ item.samples }}</span>
-          </div>
+        <div class="panel-actions">
+          <button class="ghost-btn" @click="exportChart('sceneFunnel', 'png')">
+            PNG
+          </button>
+          <button class="ghost-btn" @click="exportChart('sceneFunnel', 'svg')">
+            SVG
+          </button>
+          <button class="ghost-btn" @click="exportChart('sceneFunnel', 'pdf')">
+            PDF
+          </button>
         </div>
       </div>
-      <div class="analysis-footer">
-        <span>薄弱场景：{{ sceneWeakest?.scene }}</span>
-        <strong>mAP {{ sceneWeakest?.map50 }}%</strong>
-      </div>
+      <div class="chart-canvas" ref="sceneFunnelRef"></div>
     </div>
 
     <div class="panel">
       <div class="panel-header">
-        <h3>P-R 曲线与阈值敏感性</h3>
-      </div>
-      <svg viewBox="0 0 320 180" class="curve-chart" aria-label="P-R Curve">
-        <path d="M 0 180 L 320 180" class="axis"></path>
-        <path d="M 0 0 L 0 180" class="axis"></path>
-        <path :d="prPath" class="curve"></path>
-      </svg>
-      <div class="metric-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>IoU</th>
-              <th>mAP</th>
-              <th>Precision</th>
-              <th>Recall</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in series.iouMetrics" :key="item.iou">
-              <td>{{ item.iou }}</td>
-              <td>{{ item.map }}%</td>
-              <td>{{ item.precision }}%</td>
-              <td>{{ item.recall }}%</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="confidence-band-list">
-        <div
-          v-for="item in series.confidenceBands"
-          :key="item.threshold"
-          class="confidence-band-item"
-        >
-          <span>阈值 {{ item.threshold }}</span>
-          <span>P {{ item.precision }}%</span>
-          <span>R {{ item.recall }}%</span>
-          <span>F1 {{ item.f1 }}%</span>
+        <h3>P-R 曲线</h3>
+        <div class="panel-actions">
+          <button class="ghost-btn" @click="exportChart('prLine', 'png')">
+            PNG
+          </button>
+          <button class="ghost-btn" @click="exportChart('prLine', 'svg')">
+            SVG
+          </button>
+          <button class="ghost-btn" @click="exportChart('prLine', 'pdf')">
+            PDF
+          </button>
         </div>
       </div>
+      <div class="chart-canvas tall" ref="prLineRef"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h3>IoU 阈值趋势</h3>
+        <div class="panel-actions">
+          <button class="ghost-btn" @click="exportChart('iouLine', 'png')">
+            PNG
+          </button>
+          <button class="ghost-btn" @click="exportChart('iouLine', 'svg')">
+            SVG
+          </button>
+          <button class="ghost-btn" @click="exportChart('iouLine', 'pdf')">
+            PDF
+          </button>
+        </div>
+      </div>
+      <div class="chart-canvas" ref="iouLineRef"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h3>阈值敏感性</h3>
+        <div class="panel-actions">
+          <button
+            class="ghost-btn"
+            @click="exportChart('confidenceLine', 'png')"
+          >
+            PNG
+          </button>
+          <button
+            class="ghost-btn"
+            @click="exportChart('confidenceLine', 'svg')"
+          >
+            SVG
+          </button>
+          <button
+            class="ghost-btn"
+            @click="exportChart('confidenceLine', 'pdf')"
+          >
+            PDF
+          </button>
+        </div>
+      </div>
+      <div class="chart-canvas" ref="confidenceLineRef"></div>
     </div>
 
     <div class="panel">
       <div class="panel-header">
         <h3>实时性能趋势</h3>
-      </div>
-      <div class="trend-block">
-        <div class="trend-item">
-          <div class="trend-title">
-            <span>FPS 波动</span>
-            <strong>{{ summary.fps }}</strong>
-          </div>
-          <svg viewBox="0 0 320 96" class="trend-chart" aria-label="FPS Trend">
-            <path d="M 0 96 L 320 96" class="axis"></path>
-            <path :d="fpsPath" class="curve"></path>
-          </svg>
-        </div>
-        <div class="trend-item">
-          <div class="trend-title">
-            <span>时延波动</span>
-            <strong>{{ summary.latency }}ms</strong>
-          </div>
-          <svg
-            viewBox="0 0 320 96"
-            class="trend-chart"
-            aria-label="Latency Trend"
+        <div class="panel-actions">
+          <button
+            class="ghost-btn"
+            @click="exportChart('performanceLine', 'png')"
           >
-            <path d="M 0 96 L 320 96" class="axis"></path>
-            <path :d="latencyPath" class="curve latency-curve"></path>
-          </svg>
+            PNG
+          </button>
+          <button
+            class="ghost-btn"
+            @click="exportChart('performanceLine', 'svg')"
+          >
+            SVG
+          </button>
+          <button
+            class="ghost-btn"
+            @click="exportChart('performanceLine', 'pdf')"
+          >
+            PDF
+          </button>
         </div>
       </div>
+      <div class="chart-canvas tall" ref="performanceLineRef"></div>
     </div>
 
     <div class="panel metrics-panel-wide">
       <div class="panel-header">
-        <h3>分时检测质量明细</h3>
+        <h3>分时检测质量</h3>
+        <div class="panel-actions">
+          <span class="update-time">更新 {{ lastUpdatedText }}</span>
+          <button class="ghost-btn" @click="refreshMetrics">刷新数据</button>
+          <button class="ghost-btn" @click="exportChart('hourlyBar', 'png')">
+            PNG
+          </button>
+          <button class="ghost-btn" @click="exportChart('hourlyBar', 'svg')">
+            SVG
+          </button>
+          <button class="ghost-btn" @click="exportChart('hourlyBar', 'pdf')">
+            PDF
+          </button>
+        </div>
       </div>
-      <div class="metric-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>时间段</th>
-              <th>检测目标</th>
-              <th>告警数</th>
-              <th>平均置信度</th>
-              <th>mAP@0.5</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in series.hourlyQuality" :key="item.period">
-              <td>{{ item.period }}</td>
-              <td>{{ item.targets }}</td>
-              <td>{{ item.warnings }}</td>
-              <td>{{ item.avgScore }}%</td>
-              <td>{{ item.map50 }}%</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="chart-canvas tall" ref="hourlyBarRef"></div>
+      <div class="pagination-bar">
+        <button class="ghost-btn" @click="prevPage" :disabled="pageIndex === 0">
+          上一页
+        </button>
+        <span class="page-info"
+          >第 {{ pageIndex + 1 }} / {{ totalPages }} 页</span
+        >
+        <button
+          class="ghost-btn"
+          @click="nextPage"
+          :disabled="pageIndex >= totalPages - 1"
+        >
+          下一页
+        </button>
       </div>
     </div>
   </section>
