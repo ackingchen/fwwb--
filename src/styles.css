@@ -370,26 +370,36 @@ label span,
   grid-template-columns: 1fr 520px 340px;
   gap: 18px;
   align-items: stretch;
+  min-height: calc(
+    100vh - 120px
+  ); /* Add a min height to force columns to stretch equally */
 }
 
 .video-section {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: 100%;
+  min-height: 0;
+}
+
+.video-card {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .control-section {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: 100%;
+  min-height: 0;
 }
 
 .control-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
   align-content: start;
 }
 
@@ -398,8 +408,18 @@ label span,
   display: flex;
   flex-direction: column;
   gap: 12px;
-  align-self: stretch;
-  height: 100%;
+  min-height: 0;
+}
+
+.stats-module-large {
+  flex: 0 0 auto; /* Make stats module height adapt to its content */
+}
+
+.log-module-mini {
+  flex: 1 1 0; /* Log module will fill the exact remaining space */
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* Important for flex child to shrink properly */
 }
 
 .aux-module {
@@ -503,9 +523,9 @@ label span,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: none;
-  flex: 1;
+  flex: 1 1 0;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .log-item {
@@ -713,42 +733,112 @@ label span,
   border-radius: 2px;
 }
 
-/* Alert Filter Module */
-.alert-filter-module {
+/* Stream Switch Module */
+.stream-switch-module {
   grid-column: span 2;
 }
 
-.filter-chips {
+.mode-tabs {
   display: flex;
   gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px;
+  border-radius: 6px;
 }
 
-.chip {
+.tab-btn {
   flex: 1;
-  height: 32px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.05);
+  background: transparent;
+  border: none;
   color: var(--muted);
   font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.chip.active.danger {
+.tab-btn.active {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+.stream-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+.control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+}
+
+.control-input {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+}
+
+.control-input:focus {
+  border-color: var(--primary);
+}
+
+.control-file {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.control-file::file-selector-button {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-right: 8px;
+}
+
+.control-btn {
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.control-btn.primary {
+  background: var(--primary);
+  color: #fff;
+}
+
+.control-btn.primary:hover {
+  background: var(--primary-strong);
+}
+
+.control-btn.danger {
   background: rgba(255, 123, 123, 0.2);
   color: var(--danger);
-  border-color: var(--danger);
 }
-.chip.active.warning {
-  background: rgba(246, 207, 104, 0.2);
-  color: var(--warning);
-  border-color: var(--warning);
+
+.control-btn.danger:hover {
+  background: rgba(255, 123, 123, 0.3);
 }
-.chip.active.normal {
-  background: rgba(97, 217, 232, 0.2);
-  color: var(--cyan);
-  border-color: var(--cyan);
+
+.control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Time Module */
@@ -1085,7 +1175,7 @@ label span,
   }
 
   .filter-module,
-  .alert-filter-module,
+  .stream-switch-module,
   .time-module,
   .quick-module,
   .device-module,
@@ -1105,7 +1195,7 @@ label span,
 
   .control-module,
   .filter-module,
-  .alert-filter-module,
+  .stream-switch-module,
   .time-module,
   .quick-module,
   .device-module,
@@ -1138,9 +1228,10 @@ label span,
 /* Video Lower Grid (Subpanels) */
 .video-lower-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 16px;
+  flex: 0 0 auto;
 }
 
 .subpanel {
@@ -1497,13 +1588,6 @@ label span,
   color: var(--text);
 }
 
-.log-module-mini {
-  min-height: 220px;
-  display: flex;
-  flex-direction: column;
-  margin-top: auto;
-}
-
 /* Video Info Tag (FPS) */
 .video-info-tag {
   position: absolute;
@@ -1568,15 +1652,23 @@ label span,
 
 /* Ensure video stage fills the width */
 .video-stage {
+  flex: 1 1 0;
   position: relative;
-  min-height: 530px;
+  min-height: 400px;
   width: 100%;
   border-radius: 12px;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(79, 149, 255, 0.12);
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.32)),
-    linear-gradient(135deg, #000c1f 0%, #03142c 50%, #061b37 100%);
+    radial-gradient(
+      circle at center,
+      rgba(79, 149, 255, 0.05) 0%,
+      rgba(4, 16, 31, 0.8) 100%
+    ),
+    #020b16;
 }
 
 .video-stage.board-style {
