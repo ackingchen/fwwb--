@@ -112,10 +112,18 @@ const refreshMetrics = () => {
         +(item.avgScore * (0.97 + Math.random() * 0.06)).toFixed(1),
       ),
     ),
+    map50: Math.max(
+      0,
+      Math.min(
+        100,
+        +(item.map50 * (0.97 + Math.random() * 0.06)).toFixed(1),
+      ),
+    ),
   }));
   localSeries.value = next;
   lastUpdated.value = new Date();
   refreshKey.value += 1;
+  pageIndex.value = 0;
 };
 
 const nextPage = () => {
@@ -449,7 +457,7 @@ onMounted(() => {
   initChart("performanceLine", performanceLineRef.value);
   initChart("hourlyBar", hourlyBarRef.value);
   updateCharts();
-  window.addEventListener("resize", resizeCharts);
+  // resize listener is managed by onActivated/onDeactivated to avoid double registration with keep-alive
 });
 
 onActivated(() => {
@@ -538,7 +546,7 @@ watch([refreshKey, pageIndex], updateCharts);
             SVG
           </button>
           <button class="ghost-btn" @click="exportChart('classPie', 'pdf')">
-            PDF
+            打印
           </button>
         </div>
       </div>
@@ -556,7 +564,7 @@ watch([refreshKey, pageIndex], updateCharts);
             SVG
           </button>
           <button class="ghost-btn" @click="exportChart('sceneFunnel', 'pdf')">
-            PDF
+            打印
           </button>
         </div>
       </div>
@@ -574,7 +582,7 @@ watch([refreshKey, pageIndex], updateCharts);
             SVG
           </button>
           <button class="ghost-btn" @click="exportChart('prLine', 'pdf')">
-            PDF
+            打印
           </button>
         </div>
       </div>
@@ -592,7 +600,7 @@ watch([refreshKey, pageIndex], updateCharts);
             SVG
           </button>
           <button class="ghost-btn" @click="exportChart('iouLine', 'pdf')">
-            PDF
+            打印
           </button>
         </div>
       </div>
@@ -619,7 +627,7 @@ watch([refreshKey, pageIndex], updateCharts);
             class="ghost-btn"
             @click="exportChart('confidenceLine', 'pdf')"
           >
-            PDF
+            打印
           </button>
         </div>
       </div>
@@ -646,7 +654,7 @@ watch([refreshKey, pageIndex], updateCharts);
             class="ghost-btn"
             @click="exportChart('performanceLine', 'pdf')"
           >
-            PDF
+            打印
           </button>
         </div>
       </div>
@@ -666,7 +674,7 @@ watch([refreshKey, pageIndex], updateCharts);
             SVG
           </button>
           <button class="ghost-btn" @click="exportChart('hourlyBar', 'pdf')">
-            PDF
+            打印
           </button>
         </div>
       </div>

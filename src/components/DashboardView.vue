@@ -554,6 +554,7 @@ const onImageFileChange = (e) => {
     if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
     imageUrl.value = URL.createObjectURL(file);
     clearCanvas();
+    canvasDetections = [];
   }
 };
 
@@ -614,20 +615,12 @@ const handleResize = () => {
   if (activeMode.value === "image" && localImg.value) onLocalImageLoaded();
 };
 
-let isActive = false;
-
-onMounted(() => {
-  window.addEventListener("resize", handleResize);
-});
-
 onActivated(() => {
-  isActive = true;
   window.addEventListener("resize", handleResize);
   setTimeout(() => handleResize(), 0);
 });
 
 onDeactivated(() => {
-  isActive = false;
   window.removeEventListener("resize", handleResize);
 });
 
@@ -639,6 +632,8 @@ onUnmounted(() => {
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value);
   if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
   window.removeEventListener("resize", handleResize);
+  window.removeEventListener("online", handleOnline);
+  window.removeEventListener("offline", handleOffline);
 });
 
 // Time Range State (Upgraded to datetime-local)
@@ -683,9 +678,9 @@ const categoryTree = [
     key: "all",
     label: "全选",
     children: [
-      { key: "person", label: "行人 (Person)", color: "#ff7b7b" },
+      { key: "person", label: "人员 (Person)", color: "#ff7b7b" },
       { key: "vehicle", label: "车辆 (Vehicle)", color: "#61d9e8" },
-      { key: "facility", label: "建筑 (Building)", color: "#f6cf68" },
+      { key: "facility", label: "设施 (Facility)", color: "#f6cf68" },
       { key: "animal", label: "动物 (Animal)", color: "#a56af5" },
     ],
   },
