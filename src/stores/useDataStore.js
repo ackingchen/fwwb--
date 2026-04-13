@@ -29,7 +29,7 @@ export const useDataStore = defineStore("data", () => {
   const activeTask = computed(
     () =>
       tasks.value.find((task) => task.id === configStore.selectedTaskId) ??
-      tasks.value[0],
+      tasks.value[0] ?? {},
   );
 
   return {

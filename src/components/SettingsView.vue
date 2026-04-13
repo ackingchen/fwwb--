@@ -2,7 +2,11 @@
 import { useConfigStore } from "../stores/useConfigStore";
 import { storeToRefs } from "pinia";
 import { ref, reactive, computed } from "vue";
-import { loginHistory, deviceList, systemLogs } from "../mock/data";
+import {
+  loginHistory as mockLoginHistory,
+  deviceList as mockDeviceList,
+  systemLogs as mockSystemLogs,
+} from "../mock/data";
 
 const configStore = useConfigStore();
 const {
@@ -29,6 +33,10 @@ const activeTab = ref("detection");
 const isSaving = ref(false);
 const showSaveSuccess = ref(false);
 const showSaveError = ref(false);
+
+const loginHistory = ref([...mockLoginHistory]);
+const deviceList = ref([...mockDeviceList]);
+const systemLogs = ref([...mockSystemLogs]);
 
 const tabs = [
   { key: "detection", label: "模型与检测", icon: "🎯" },
@@ -77,7 +85,7 @@ function triggerSave() {
 // Security Actions
 function revokeDevice(id) {
   if (confirm("确定要强制下线该设备吗？")) {
-    // Mock revoke
+    deviceList.value = deviceList.value.filter((dev) => dev.id !== id);
     alert("设备已下线");
   }
 }

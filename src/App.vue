@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted, onErrorCaptured } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDataStore } from "./stores/useDataStore";
 import { storeToRefs } from "pinia";
@@ -34,6 +34,28 @@ function updatePadding() {
     contentPaddingTop.value = `${height + 24}px`;
   }
 }
+
+// Error Boundary & Loading State
+const hasError = ref(false);
+const errorMessage = ref("");
+const isNavigating = ref(false);
+
+router.beforeEach((to, from, next) => {
+  hasError.value = false;
+  isNavigating.value = true;
+  next();
+});
+
+router.afterEach(() => {
+  isNavigating.value = false;
+});
+
+onErrorCaptured((err, instance, info) => {
+  console.error("Module rendering error:", err, info);
+  hasError.value = true;
+  errorMessage.value = err.message || "模块渲染异常，请刷新重试";
+  return false; // stop propagation
+});
 
 onMounted(() => {
   updatePadding();
@@ -93,11 +115,74 @@ onUnmounted(() => {
     </header>
 
     <main class="main-content" :style="{ paddingTop: contentPaddingTop }">
-      <router-view v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" />
-        </keep-alive>
+      <div v-if="hasError" class="error-boundary">
+        <div class="empty-state-content">
+          <div class="icon">⚠️</div>
+          <h3>模块加载失败</h3>
+          <p>{{ errorMessage }}</p>
+          <button
+            class="action-btn primary"
+            @click="
+              hasError = false;
+              navigate(activeTab);
+            "
+          >
+            重试
+          </button>
+        </div>
+      </div>
+      <div v-else-if="isNavigating" class="loading-state">
+        <div class="empty-state-content">
+          <div class="icon spinner">⏳</div>
+          <p>模块加载中...</p>
+        </div>
+      </div>
+      <router-view v-else v-slot="{ Component, route }">
+        <transition name="fade" mode="out-in">
+          <keep-alive>
+            <component :is="Component" :key="route.fullPath" />
+          </keep-alive>
+        </transition>
       </router-view>
     </main>
   </div>
 </template>
+
+<style scoped>
+.error-boundary,
+.loading-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  min-height: 50vh;
+  text-align: center;
+  color: #9cb6db;
+}
+.empty-state-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.icon {
+  font-size: 48px;
+}
+.spinner {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>

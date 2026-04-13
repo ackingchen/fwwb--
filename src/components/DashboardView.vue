@@ -2,7 +2,16 @@
 import { useConfigStore } from "../stores/useConfigStore";
 import { useDataStore } from "../stores/useDataStore";
 import { storeToRefs } from "pinia";
-import { ref, computed, onUnmounted } from "vue";
+import {
+  ref,
+  computed,
+  watch,
+  onUnmounted,
+  onMounted,
+  onActivated,
+  onDeactivated,
+} from "vue";
+import axios from "axios";
 
 const configStore = useConfigStore();
 const dataStore = useDataStore();
@@ -20,13 +29,30 @@ const {
 // Mock state for new controls
 const systemStatus = ref("running"); // running, stopped
 
+// Add network and error states
+const isOffline = ref(!navigator.onLine);
+const mediaError = ref("");
+
+const handleOnline = () => {
+  isOffline.value = false;
+  if (mediaError.value === "当前网络不可用，请检查网络连接") {
+    mediaError.value = "";
+  }
+};
+const handleOffline = () => {
+  isOffline.value = true;
+};
+
+window.addEventListener("online", handleOnline);
+window.addEventListener("offline", handleOffline);
+
 // --- Stream Switch Module State ---
 const activeMode = ref("stream"); // 'stream', 'video', 'image'
 const detectCanvas = ref(null);
 
 // Mode: Stream
-const streamWsAddr = ref("ws://localhost:8080/stream-detect");
-const streamRtspUrl = ref("rtsp://192.168.191.60:8080/h264.sdp");
+const streamWsAddr = ref("ws://10.21.196.142:8080/stream-detect");
+const streamRtspUrl = ref("");
 const streamConnected = ref(false);
 const streamBase64 = ref("");
 const streamImg = ref(null);
@@ -35,12 +61,20 @@ let streamWs = null;
 // Mode: Video
 const videoFile = ref(null);
 const videoUrl = ref("");
-const videoBackendPath = ref("E:\\edge下载\\1489368329-1-100026.mp4");
 const videoConnected = ref(false);
 const localVideo = ref(null);
 let videoWs = null;
 let videoSyncInterval = null;
 let videoBuffer = [];
+let videoAnimationId = null;
+
+// Mode: Video Upload State
+const uploadState = ref("idle"); // 'idle', 'uploading', 'paused', 'success', 'error'
+const uploadProgress = ref(0);
+const uploadSpeed = ref("0 KB/s");
+const uploadEta = ref("--s");
+const videoTaskId = ref("");
+let uploadCancelController = null;
 
 // Mode: Image
 const imageFile = ref(null);
@@ -51,12 +85,36 @@ const localImg = ref(null);
 // Global detections list to render on canvas
 let canvasDetections = [];
 
+const hasMediaSource = computed(() => {
+  if (activeMode.value === "stream") return !!streamBase64.value;
+  if (activeMode.value === "video") return !!videoUrl.value;
+  if (activeMode.value === "image") return !!imageUrl.value;
+  return false;
+});
+
+const highlightControlPanel = () => {
+  const panel = document.querySelector(".stream-switch-module");
+  if (panel) {
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+    panel.style.transition = "box-shadow 0.3s ease";
+    panel.style.boxShadow =
+      "0 0 0 2px var(--primary), 0 0 20px rgba(79, 149, 255, 0.4)";
+    setTimeout(() => {
+      panel.style.boxShadow = "";
+    }, 1500);
+  }
+};
+
 // --- Shared functions ---
 const switchMode = (mode) => {
   if (activeMode.value === "stream" && streamConnected.value) toggleStream();
-  if (activeMode.value === "video" && videoConnected.value) connectVideo();
+  if (activeMode.value === "video" && videoConnected.value)
+    toggleVideoDetection();
+  if (activeMode.value === "video" && uploadState.value === "uploading")
+    pauseVideoUpload();
 
   activeMode.value = mode;
+  mediaError.value = "";
   clearCanvas();
   canvasDetections = [];
 };
@@ -84,8 +142,27 @@ const drawDetections = (
 
   if (!detectionsToDraw || detectionsToDraw.length === 0) return;
 
-  const scaleX = displayWidth / sourceWidth;
-  const scaleY = displayHeight / sourceHeight;
+  const imageAspect = sourceWidth / sourceHeight;
+  const containerAspect = displayWidth / displayHeight;
+
+  let renderWidth, renderHeight, offsetX, offsetY;
+
+  if (imageAspect > containerAspect) {
+    // Image is wider than container, fits width
+    renderWidth = displayWidth;
+    renderHeight = displayWidth / imageAspect;
+    offsetX = 0;
+    offsetY = (displayHeight - renderHeight) / 2;
+  } else {
+    // Image is taller than container, fits height
+    renderHeight = displayHeight;
+    renderWidth = displayHeight * imageAspect;
+    offsetX = (displayWidth - renderWidth) / 2;
+    offsetY = 0;
+  }
+
+  const scaleX = renderWidth / sourceWidth;
+  const scaleY = renderHeight / sourceHeight;
 
   detectionsToDraw.forEach((det) => {
     const conf = det.confidence !== undefined ? det.confidence : det.score;
@@ -94,8 +171,8 @@ const drawDetections = (
     const [x1, y1, x2, y2] = det.bbox;
     const w = (x2 - x1) * scaleX;
     const h = (y2 - y1) * scaleY;
-    const lx = x1 * scaleX;
-    const ly = y1 * scaleY;
+    const lx = x1 * scaleX + offsetX;
+    const ly = y1 * scaleY + offsetY;
 
     ctx.strokeStyle = "#00ff88";
     ctx.lineWidth = 2;
@@ -131,40 +208,74 @@ const drawDetections = (
 
 // --- Stream Functions ---
 const toggleStream = () => {
+  mediaError.value = "";
   if (streamConnected.value) {
     if (streamWs) streamWs.close();
     streamConnected.value = false;
     streamBase64.value = "";
     clearCanvas();
   } else {
-    streamWs = new WebSocket(streamWsAddr.value);
-    streamWs.onopen = () => {
-      streamConnected.value = true;
-      streamWs.send(JSON.stringify({ url: streamRtspUrl.value }));
-    };
-    streamWs.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.image) {
-        streamBase64.value = "data:image/jpeg;base64," + data.image;
-        canvasDetections = data.detections || [];
-      }
-    };
-    streamWs.onclose = () => {
-      streamConnected.value = false;
-      streamBase64.value = "";
-    };
+    if (isOffline.value) {
+      mediaError.value = "当前网络不可用，请检查网络连接";
+      return;
+    }
+    try {
+      streamWs = new WebSocket(streamWsAddr.value);
+      streamWs.onopen = () => {
+        streamConnected.value = true;
+        mediaError.value = "";
+        streamWs.send(JSON.stringify({ url: streamRtspUrl.value }));
+      };
+      streamWs.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.image) {
+          streamBase64.value = "data:image/jpeg;base64," + data.image;
+          canvasDetections = data.detections || [];
+        }
+      };
+      streamWs.onerror = () => {
+        mediaError.value = "WebSocket 连接失败，请检查服务地址或网络状态";
+      };
+      streamWs.onclose = () => {
+        streamConnected.value = false;
+        streamBase64.value = "";
+      };
+    } catch (e) {
+      mediaError.value = "WebSocket 实例化失败，请检查地址格式";
+    }
   }
 };
 
 const onStreamImageLoaded = () => {
   if (!streamImg.value) return;
   const el = streamImg.value;
+  const container = el.parentElement;
+  if (!container) return;
+
   const nw = el.naturalWidth || 960;
   const nh = el.naturalHeight || 720;
-  drawDetections(canvasDetections, el.clientWidth, el.clientHeight, nw, nh);
+  drawDetections(
+    canvasDetections,
+    container.clientWidth,
+    container.clientHeight,
+    nw,
+    nh,
+  );
 };
 
 // --- Video Functions ---
+const resetUploadState = () => {
+  uploadState.value = "idle";
+  uploadProgress.value = 0;
+  uploadSpeed.value = "0 KB/s";
+  uploadEta.value = "--s";
+  videoTaskId.value = "";
+  if (uploadCancelController) {
+    uploadCancelController.abort();
+    uploadCancelController = null;
+  }
+};
+
 const onVideoFileChange = (e) => {
   const file = e.target.files[0];
   if (file) {
@@ -172,64 +283,213 @@ const onVideoFileChange = (e) => {
     if (videoUrl.value) URL.revokeObjectURL(videoUrl.value);
     videoUrl.value = URL.createObjectURL(file);
     videoBuffer = [];
+    resetUploadState();
   }
 };
 
-const connectVideo = () => {
+const toggleVideoUpload = () => {
+  if (uploadState.value === "uploading") {
+    pauseVideoUpload();
+  } else {
+    startVideoUpload();
+  }
+};
+
+const pauseVideoUpload = () => {
+  uploadState.value = "paused";
+  if (uploadCancelController) {
+    uploadCancelController.abort();
+    uploadCancelController = null;
+  }
+};
+
+const cancelVideoUpload = () => {
+  resetUploadState();
+};
+
+const formatBytes = (bytes, decimals = 2) => {
+  if (bytes === 0) return "0 Bytes";
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+};
+
+const formatTime = (seconds) => {
+  if (seconds === Infinity || isNaN(seconds)) return "--s";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+};
+
+const getUploadButtonText = () => {
+  if (uploadState.value === "idle") return "开始上传";
+  if (uploadState.value === "paused") return "继续上传"; // Though it restarts from beginning now
+  if (uploadState.value === "error") return "重试上传";
+  if (uploadState.value === "uploading") return "暂停上传";
+  return "开始上传";
+};
+
+const getUploadStatusText = () => {
+  if (uploadState.value === "uploading") return "上传中...";
+  if (uploadState.value === "paused") return "已暂停";
+  if (uploadState.value === "success") return "上传成功";
+  if (uploadState.value === "error") return "上传失败";
+  return "准备就绪";
+};
+
+const startVideoUpload = async () => {
+  if (!videoFile.value) return;
+
+  if (isOffline.value) {
+    mediaError.value = "当前网络不可用，无法进行视频上传";
+    uploadState.value = "error";
+    return;
+  }
+
+  uploadState.value = "uploading";
+  uploadProgress.value = 0; // Always start from 0 for single upload
+  uploadCancelController = new AbortController();
+
+  const file = videoFile.value;
+  let startTime = Date.now();
+  let lastLoaded = 0;
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+
+    const response = await axios.post(
+      "http://10.21.196.142:8080/detections/video",
+      formData,
+      {
+        signal: uploadCancelController.signal,
+        timeout: 0, // Disable timeout for large files
+        onUploadProgress: (progressEvent) => {
+          if (uploadState.value !== "uploading") return;
+
+          const loaded = progressEvent.loaded;
+          const total = progressEvent.total || file.size;
+
+          const now = Date.now();
+          const elapsedSec = (now - startTime) / 1000;
+
+          if (elapsedSec > 0.5) {
+            const bytesSinceLast = loaded - lastLoaded;
+            const speed = bytesSinceLast / elapsedSec;
+            uploadSpeed.value = `${formatBytes(speed)}/s`;
+            const remainingBytes = total - loaded;
+            uploadEta.value = formatTime(remainingBytes / speed);
+
+            startTime = now;
+            lastLoaded = loaded;
+          }
+
+          uploadProgress.value = Math.min((loaded / total) * 100, 100);
+        },
+      },
+    );
+
+    if (uploadState.value === "uploading") {
+      uploadState.value = "success";
+      uploadProgress.value = 100;
+      uploadSpeed.value = "0 KB/s";
+      uploadEta.value = "0s";
+      // Ensure we pick up backend task ID if provided, fallback to filename
+      videoTaskId.value =
+        response.data?.videoPath ||
+        response.data?.data?.videoPath ||
+        response.data?.data?.taskId ||
+        response.data?.data?.path ||
+        file.name;
+
+      toggleVideoDetection();
+    }
+  } catch (error) {
+    if (axios.isCancel(error)) {
+      console.log("Upload paused or cancelled");
+    } else {
+      uploadState.value = "error";
+      mediaError.value =
+        "上传失败，请重试：" +
+        (error.response?.data?.message || error.message || "未知错误");
+    }
+  }
+};
+
+const toggleVideoDetection = () => {
+  mediaError.value = "";
   if (videoConnected.value) {
     if (videoWs) videoWs.close();
     videoConnected.value = false;
     clearCanvas();
     if (videoSyncInterval) clearInterval(videoSyncInterval);
+    if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
     return;
   }
 
   if (!videoFile.value) return;
 
-  videoWs = new WebSocket("ws://localhost:8080/video-detect");
-  videoWs.onopen = () => {
-    videoConnected.value = true;
-    videoWs.send(
-      JSON.stringify({
-        command: "START",
-        videoPath: videoBackendPath.value,
-      }),
-    );
+  if (isOffline.value) {
+    mediaError.value = "当前网络不可用，无法进行视频检测分析";
+    return;
+  }
 
-    videoSyncInterval = setInterval(() => {
-      if (
-        videoWs &&
-        videoWs.readyState === WebSocket.OPEN &&
-        localVideo.value &&
-        !localVideo.value.paused
-      ) {
-        videoWs.send(
-          JSON.stringify({
-            command: "SYNC_TIME",
-            currentTime: localVideo.value.currentTime,
-          }),
-        );
+  try {
+    videoWs = new WebSocket("ws://10.21.196.142:8080/video-detect");
+    videoWs.onopen = () => {
+      videoConnected.value = true;
+      mediaError.value = "";
+      videoWs.send(
+        JSON.stringify({
+          command: "START",
+          videoPath: videoTaskId.value || videoFile.value.name,
+        }),
+      );
+      // console.log(videoTaskId.value || videoFile.value.name);
+      videoSyncInterval = setInterval(() => {
+        if (
+          videoWs &&
+          videoWs.readyState === WebSocket.OPEN &&
+          localVideo.value &&
+          !localVideo.value.paused
+        ) {
+          videoWs.send(
+            JSON.stringify({
+              command: "SYNC_TIME",
+              currentTime: localVideo.value.currentTime,
+            }),
+          );
+        }
+      }, 200);
+
+      if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
+      renderVideoLoop();
+    };
+
+    videoWs.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.detections) {
+        videoBuffer.push({
+          ts: data.timestamp,
+          data: data.detections,
+        });
+        if (videoBuffer.length > 150) videoBuffer.shift();
       }
-    }, 200);
+    };
 
-    renderVideoLoop();
-  };
+    videoWs.onerror = () => {
+      mediaError.value = "视频检测服务连接失败，请检查后端状态";
+    };
 
-  videoWs.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (data.detections) {
-      videoBuffer.push({
-        ts: data.timestamp,
-        data: data.detections,
-      });
-      if (videoBuffer.length > 150) videoBuffer.shift();
-    }
-  };
-
-  videoWs.onclose = () => {
-    videoConnected.value = false;
-    if (videoSyncInterval) clearInterval(videoSyncInterval);
-  };
+    videoWs.onclose = () => {
+      videoConnected.value = false;
+      if (videoSyncInterval) clearInterval(videoSyncInterval);
+      if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
+    };
+  } catch (e) {
+    mediaError.value = "视频检测服务异常";
+  }
 };
 
 const renderVideoLoop = () => {
@@ -250,17 +510,20 @@ const renderVideoLoop = () => {
     }
 
     if (closestFrame && minDiff < 0.5) {
-      drawDetections(
-        closestFrame.data,
-        videoEl.clientWidth,
-        videoEl.clientHeight,
-        videoEl.videoWidth,
-        videoEl.videoHeight,
-      );
+      const container = videoEl.parentElement;
+      if (container) {
+        drawDetections(
+          closestFrame.data,
+          container.clientWidth,
+          container.clientHeight,
+          videoEl.videoWidth,
+          videoEl.videoHeight,
+        );
+      }
     }
   }
 
-  requestAnimationFrame(renderVideoLoop);
+  videoAnimationId = requestAnimationFrame(renderVideoLoop);
 };
 
 const onVideoPlay = () =>
@@ -296,22 +559,36 @@ const onImageFileChange = (e) => {
 
 const detectImage = async () => {
   if (!imageFile.value) return;
+  mediaError.value = "";
+  if (isOffline.value) {
+    mediaError.value = "当前网络不可用，无法连接云端识别服务";
+    return;
+  }
   imageDetecting.value = true;
   try {
     const formData = new FormData();
     formData.append("file", imageFile.value);
 
-    const response = await fetch("http://localhost:8080/detection/detect", {
+    const response = await fetch("http://10.21.196.142:8080/detections/image", {
       method: "POST",
       body: formData,
     });
 
-    if (!response.ok) throw new Error("API Error");
+    if (!response.ok) {
+      if (response.status === 403 || response.status === 401) {
+        throw new Error("权限不足，无法访问检测接口");
+      }
+      throw new Error("检测接口响应异常");
+    }
     canvasDetections = await response.json();
 
     onLocalImageLoaded();
   } catch (error) {
     console.error("Image detection failed:", error);
+    mediaError.value =
+      error.message === "Failed to fetch"
+        ? "网络请求失败，请检查服务状态"
+        : error.message;
   } finally {
     imageDetecting.value = false;
   }
@@ -320,10 +597,13 @@ const detectImage = async () => {
 const onLocalImageLoaded = () => {
   if (!localImg.value || !canvasDetections.length) return;
   const el = localImg.value;
+  const container = el.parentElement;
+  if (!container) return;
+
   drawDetections(
     canvasDetections,
-    el.clientWidth,
-    el.clientHeight,
+    container.clientWidth,
+    container.clientHeight,
     el.naturalWidth,
     el.naturalHeight,
   );
@@ -334,12 +614,28 @@ const handleResize = () => {
   if (activeMode.value === "image" && localImg.value) onLocalImageLoaded();
 };
 
-window.addEventListener("resize", handleResize);
+let isActive = false;
+
+onMounted(() => {
+  window.addEventListener("resize", handleResize);
+});
+
+onActivated(() => {
+  isActive = true;
+  window.addEventListener("resize", handleResize);
+  setTimeout(() => handleResize(), 0);
+});
+
+onDeactivated(() => {
+  isActive = false;
+  window.removeEventListener("resize", handleResize);
+});
 
 onUnmounted(() => {
   if (streamWs) streamWs.close();
   if (videoWs) videoWs.close();
   if (videoSyncInterval) clearInterval(videoSyncInterval);
+  if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value);
   if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
   window.removeEventListener("resize", handleResize);
@@ -367,7 +663,9 @@ const setTimeShortcut = (hours) => {
 };
 
 const validateTime = () => {
-  if (new Date(startTime.value) > new Date(endTime.value)) {
+  const start = new Date(startTime.value);
+  const end = new Date(endTime.value);
+  if (isNaN(start) || isNaN(end) || start > end) {
     timeError.value = true;
   } else {
     timeError.value = false;
@@ -432,15 +730,21 @@ const buildPieSegments = (items) => {
     const angle = percentage * 360;
     const startRad = ((startAngle - 90) * Math.PI) / 180;
     const endRad = ((startAngle + angle - 90) * Math.PI) / 180;
-    const x1 = 16 + radius * Math.cos(startRad);
-    const y1 = 16 + radius * Math.sin(startRad);
-    const x2 = 16 + radius * Math.cos(endRad);
-    const y2 = 16 + radius * Math.sin(endRad);
+
+    // Fix: when percentage is 100%, the start and end angles are the same
+    // and arc drawing will fail. So we check if it's almost 360
     const largeArcFlag = angle > 180 ? 1 : 0;
-    const pathData =
-      total === 0
-        ? `M 16 0 A 16 16 0 1 1 15.99 0`
-        : `M 16 16 L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
+    let pathData;
+
+    if (total === 0 || percentage === 1) {
+      pathData = `M 16 0 A 16 16 0 1 1 15.99 0`;
+    } else {
+      const x1 = 16 + radius * Math.cos(startRad);
+      const y1 = 16 + radius * Math.sin(startRad);
+      const x2 = 16 + radius * Math.cos(endRad);
+      const y2 = 16 + radius * Math.sin(endRad);
+      pathData = `M 16 16 L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
+    }
 
     startAngle += angle;
     return {
@@ -500,16 +804,19 @@ const toggleCategoryLegend = (name) => {
 };
 
 const setCategoryHover = (name) => {
-  const total = activeCategories.value.reduce(
-    (sum, item) => sum + item.value,
-    0,
-  );
   const rawItem =
     activeCategories.value.find((item) => item.name === name) ||
     series.value.classes.find((item) => item.name === name);
   if (!rawItem) return;
+
+  const isActive = activeCategoryNames.value.includes(name);
+  const total = isActive
+    ? activeCategories.value.reduce((sum, item) => sum + item.value, 0)
+    : series.value.classes.reduce((sum, item) => sum + item.value, 0);
+
   const percentage =
     total === 0 ? 0 : Math.round((rawItem.value / total) * 100);
+
   hoveredCategory.value = {
     name: rawItem.name,
     value: rawItem.value,
@@ -619,22 +926,157 @@ const setCategoryHover = (name) => {
             ></canvas>
 
             <div
-              v-if="!streamBase64 && !videoUrl && !imageUrl"
-              v-for="item in detections"
-              :key="item.id"
-              :class="['bbox', item.level]"
-              :style="{
-                left: `${item.bbox[0]}%`,
-                top: `${item.bbox[1]}%`,
-                width: `${item.bbox[2]}%`,
-                height: `${item.bbox[3]}%`,
-                zIndex: 4,
-              }"
+              v-if="!hasMediaSource"
+              class="empty-state-overlay"
+              style="
+                position: absolute;
+                inset: 0;
+                z-index: 25;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(2, 11, 22, 0.85);
+                backdrop-filter: blur(4px);
+              "
             >
-              <span>{{ item.label }} {{ Math.round(item.score * 100) }}%</span>
+              <div
+                class="empty-state-content"
+                style="
+                  text-align: center;
+                  max-width: 320px;
+                  padding: 32px;
+                  border-radius: 16px;
+                  background: rgba(11, 35, 72, 0.5);
+                  border: 1px solid rgba(79, 149, 255, 0.15);
+                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+                "
+              >
+                <div
+                  class="empty-icon-wrapper"
+                  style="
+                    margin-bottom: 16px;
+                    display: inline-flex;
+                    padding: 16px;
+                    border-radius: 50%;
+                    background: rgba(255, 255, 255, 0.05);
+                  "
+                >
+                  <svg
+                    v-if="isOffline"
+                    class="empty-icon"
+                    style="width: 48px; height: 48px; color: var(--danger)"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                    <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+                    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+                    <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+                    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                    <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                  </svg>
+                  <svg
+                    v-else-if="mediaError"
+                    class="empty-icon"
+                    style="width: 48px; height: 48px; color: var(--warning)"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                  </svg>
+                  <svg
+                    v-else
+                    class="empty-icon"
+                    style="width: 48px; height: 48px; color: var(--muted)"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect
+                      x="2"
+                      y="2"
+                      width="20"
+                      height="20"
+                      rx="2.18"
+                      ry="2.18"
+                    ></rect>
+                    <line x1="7" y1="2" x2="7" y2="22"></line>
+                    <line x1="17" y1="2" x2="17" y2="22"></line>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <line x1="2" y1="7" x2="7" y2="7"></line>
+                    <line x1="2" y1="17" x2="7" y2="17"></line>
+                    <line x1="17" y1="17" x2="22" y2="17"></line>
+                    <line x1="17" y1="7" x2="22" y2="7"></line>
+                  </svg>
+                </div>
+                <h3
+                  style="margin: 0 0 8px; font-size: 18px; color: var(--text)"
+                >
+                  {{
+                    isOffline
+                      ? "网络已断开"
+                      : mediaError
+                        ? "接入异常"
+                        : "暂无数据源接入"
+                  }}
+                </h3>
+                <p
+                  style="
+                    margin: 0 0 24px;
+                    font-size: 13px;
+                    color: var(--muted);
+                    line-height: 1.5;
+                  "
+                >
+                  {{
+                    isOffline
+                      ? "请检查您的网络连接状态"
+                      : mediaError
+                        ? mediaError
+                        : "当前未检测到任何输入，请通过右侧控制面板选择实时流、视频或图片进行接入"
+                  }}
+                </p>
+
+                <div v-if="!isOffline && !mediaError">
+                  <button
+                    class="action-btn primary"
+                    style="width: 100%; justify-content: center"
+                    @click="highlightControlPanel"
+                  >
+                    立即接入
+                  </button>
+                </div>
+                <div v-if="mediaError && !isOffline">
+                  <button
+                    class="action-btn"
+                    style="width: 100%; justify-content: center"
+                    @click="mediaError = ''"
+                  >
+                    清除错误
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div class="video-info-tag" style="z-index: 30">
+            <div
+              class="video-info-tag"
+              v-if="hasMediaSource"
+              style="z-index: 30"
+            >
               {{
                 activeMode === "stream"
                   ? "实时流"
@@ -874,7 +1316,7 @@ const setCategoryHover = (name) => {
                 <input
                   v-model="streamWsAddr"
                   class="control-input"
-                  placeholder="WebSocket 地址 (如: ws://localhost:8080/...)"
+                  placeholder="WebSocket 地址 (如: ws://10.21.196.142:8080/...)"
                 />
                 <input
                   v-model="streamRtspUrl"
@@ -894,37 +1336,94 @@ const setCategoryHover = (name) => {
 
               <!-- Video Mode -->
               <div v-if="activeMode === 'video'" class="control-panel">
-                <input
-                  type="file"
-                  accept="video/*"
-                  @change="onVideoFileChange"
-                  class="control-file"
-                />
-                <input
-                  v-model="videoBackendPath"
-                  class="control-input"
-                  placeholder="后端处理路径 (绝对路径)"
-                />
-                <button
-                  @click="connectVideo"
-                  :class="[
-                    'control-btn',
-                    videoConnected ? 'danger' : 'primary',
-                  ]"
-                  :disabled="!videoFile"
+                <label class="file-upload-wrapper">
+                  <span class="file-btn">选择文件</span>
+                  <span :class="['file-name', { 'has-file': videoFile }]">
+                    {{ videoFile ? videoFile.name : "未选择文件" }}
+                  </span>
+                  <input
+                    type="file"
+                    accept="video/*"
+                    @change="onVideoFileChange"
+                    class="control-file"
+                  />
+                </label>
+
+                <!-- Upload Progress UI -->
+                <div
+                  v-if="uploadState !== 'idle'"
+                  class="upload-progress-container"
                 >
-                  {{ videoConnected ? "断开视频检测" : "开始视频检测" }}
-                </button>
+                  <div class="upload-info">
+                    <span class="upload-status">{{
+                      getUploadStatusText()
+                    }}</span>
+                    <span class="upload-stats"
+                      >{{ uploadProgress.toFixed(1) }}% | {{ uploadSpeed }} |
+                      剩余 {{ uploadEta }}</span
+                    >
+                  </div>
+                  <div class="progress-bar-wrapper">
+                    <div
+                      class="progress-bar"
+                      :class="{
+                        paused: uploadState === 'paused',
+                        error: uploadState === 'error',
+                        success: uploadState === 'success',
+                      }"
+                      :style="{ width: `${uploadProgress}%` }"
+                    ></div>
+                  </div>
+                </div>
+
+                <div class="action-group">
+                  <button
+                    v-if="!videoConnected && uploadState !== 'success'"
+                    @click="toggleVideoUpload"
+                    class="control-btn primary"
+                    :disabled="!videoFile"
+                  >
+                    {{ getUploadButtonText() }}
+                  </button>
+                  <button
+                    v-if="uploadState === 'success' || videoConnected"
+                    @click="toggleVideoDetection"
+                    :class="[
+                      'control-btn',
+                      videoConnected ? 'danger' : 'primary',
+                    ]"
+                  >
+                    {{ videoConnected ? "停止视频检测" : "开始视频检测" }}
+                  </button>
+                  <button
+                    v-if="
+                      (uploadState === 'uploading' ||
+                        uploadState === 'paused' ||
+                        uploadState === 'error') &&
+                      !videoConnected
+                    "
+                    @click="cancelVideoUpload"
+                    class="control-btn danger"
+                  >
+                    取消
+                  </button>
+                </div>
               </div>
 
               <!-- Image Mode -->
               <div v-if="activeMode === 'image'" class="control-panel">
-                <input
-                  type="file"
-                  accept="image/*"
-                  @change="onImageFileChange"
-                  class="control-file"
-                />
+                <label class="file-upload-wrapper">
+                  <span class="file-btn">选择图片</span>
+                  <span :class="['file-name', { 'has-file': imageFile }]">
+                    {{ imageFile ? imageFile.name : "未选择图片" }}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    @change="onImageFileChange"
+                    class="control-file"
+                  />
+                </label>
                 <button
                   @click="detectImage"
                   class="control-btn primary"

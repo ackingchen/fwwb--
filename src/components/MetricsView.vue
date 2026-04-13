@@ -1,5 +1,13 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  onActivated,
+  onDeactivated,
+  ref,
+  watch,
+} from "vue";
 import { useDataStore } from "../stores/useDataStore";
 import { storeToRefs } from "pinia";
 import * as echarts from "echarts";
@@ -179,11 +187,18 @@ const exportChart = async (key, type) => {
   const printWindow = window.open("", "_blank");
   if (!printWindow) return;
   printWindow.document.write(
-    `<img src="${svgData}" style="width:100%;height:auto;" />`,
+    '<!DOCTYPE html><html><head><title>Print Chart</title></head><body style="margin:0;padding:0;text-align:center;"></body></html>',
   );
+  const img = printWindow.document.createElement("img");
+  img.src = svgData;
+  img.style.width = "100%";
+  img.style.height = "auto";
+  printWindow.document.body.appendChild(img);
   printWindow.document.close();
   printWindow.focus();
-  printWindow.print();
+  setTimeout(() => {
+    printWindow.print();
+  }, 200);
 };
 
 const buildChartOptions = () => {
@@ -423,6 +438,8 @@ const updateCharts = () => {
   chartMap.get("hourlyBar")?.setOption(options.hourlyBarOption);
 };
 
+let isActive = false;
+
 onMounted(() => {
   initChart("classPie", classPieRef.value);
   initChart("sceneFunnel", sceneFunnelRef.value);
@@ -435,6 +452,18 @@ onMounted(() => {
   window.addEventListener("resize", resizeCharts);
 });
 
+onActivated(() => {
+  isActive = true;
+  window.addEventListener("resize", resizeCharts);
+  // Force resize in case window was resized while inactive
+  setTimeout(() => resizeCharts(), 0);
+});
+
+onDeactivated(() => {
+  isActive = false;
+  window.removeEventListener("resize", resizeCharts);
+});
+
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resizeCharts);
   chartMap.forEach((chart) => chart.dispose());
@@ -445,7 +474,7 @@ watch(
   series,
   () => {
     localSeries.value = cloneSeries(series.value);
-    updateCharts();
+    if (isActive) updateCharts();
   },
   { deep: true },
 );
