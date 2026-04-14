@@ -1,13 +1,26 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted, onErrorCaptured } from "vue";
+import { computed, ref, watch, onMounted, onUnmounted, onErrorCaptured } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDataStore } from "./stores/useDataStore";
+import { useConfigStore } from "./stores/useConfigStore";
 import { storeToRefs } from "pinia";
 
 const route = useRoute();
 const router = useRouter();
 const dataStore = useDataStore();
+const configStore = useConfigStore();
 const { summary } = storeToRefs(dataStore);
+const { theme } = storeToRefs(configStore);
+
+function toggleTheme() {
+  theme.value = theme.value === "dark" ? "light" : "dark";
+}
+
+function applyTheme(val) {
+  document.documentElement.setAttribute("data-theme", val);
+}
+
+watch(theme, applyTheme, { immediate: true });
 
 const headerRef = ref(null);
 const contentPaddingTop = ref("112px"); // Default fallback
@@ -106,6 +119,10 @@ onUnmounted(() => {
       </nav>
 
       <div class="header-right">
+        <button class="theme-toggle" @click="toggleTheme" :title="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'">
+          <span v-if="theme === 'dark'">&#9790;</span>
+          <span v-else>&#9728;</span>
+        </button>
         <div class="topbar-status">
           <span class="status-dot"></span>
           <span>系统状态: 运行中</span>
@@ -157,7 +174,7 @@ onUnmounted(() => {
   height: 100%;
   min-height: 50vh;
   text-align: center;
-  color: #9cb6db;
+  color: var(--muted);
 }
 .empty-state-content {
   display: flex;

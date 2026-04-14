@@ -694,6 +694,33 @@ const categoryColorMap = {
   动物: "#a56af5",
 };
 
+const connList = computed(() => [
+  {
+    name: "WebSocket 实时流",
+    status: streamConnected.value ? "ok" : "off",
+    label: streamConnected.value ? "已连接" : "未连接",
+  },
+  {
+    name: "视频检测通道",
+    status: videoConnected.value ? "ok" : "off",
+    label: videoConnected.value ? "已连接" : "未连接",
+  },
+  {
+    name: "后端 API",
+    status: isOffline.value ? "off" : "ok",
+    label: isOffline.value ? "离线" : "在线",
+  },
+  {
+    name: "网络状态",
+    status: isOffline.value ? "off" : "ok",
+    label: isOffline.value ? "断开" : "正常",
+  },
+]);
+
+const connOnlineCount = computed(
+  () => connList.value.filter((c) => c.status === "ok").length,
+);
+
 function toggleLabel(key) {
   const next = enabledLabels.value.includes(key)
     ? enabledLabels.value.filter((item) => item !== key)
@@ -756,7 +783,7 @@ const completionSegments = computed(() =>
     {
       name: "未完成",
       value: 100 - completionRate.value,
-      color: "rgba(255,255,255,0.18)",
+      color: "rgba(150,150,150,0.2)",
     },
   ]),
 );
@@ -930,7 +957,7 @@ const setCategoryHover = (name) => {
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                background: rgba(2, 11, 22, 0.85);
+                background: var(--overlay-bg);
                 backdrop-filter: blur(4px);
               "
             >
@@ -941,9 +968,9 @@ const setCategoryHover = (name) => {
                   max-width: 320px;
                   padding: 32px;
                   border-radius: 16px;
-                  background: rgba(11, 35, 72, 0.5);
-                  border: 1px solid rgba(79, 149, 255, 0.15);
-                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+                  background: var(--bg-panel);
+                  border: 1px solid var(--line);
+                  box-shadow: var(--shadow);
                 "
               >
                 <div
@@ -953,7 +980,7 @@ const setCategoryHover = (name) => {
                     display: inline-flex;
                     padding: 16px;
                     border-radius: 50%;
-                    background: rgba(255, 255, 255, 0.05);
+                    background: var(--status-bg);
                   "
                 >
                   <svg
@@ -1430,57 +1457,8 @@ const setCategoryHover = (name) => {
             </div>
           </div>
 
-          <!-- Module 4: Time Range -->
-          <div class="dashboard-card time-module" style="flex: 0 0 auto">
-            <div class="module-header">
-              <h4>时间范围</h4>
-              <div class="shortcut-row">
-                <button class="shortcut-btn" @click="setTimeShortcut(1)">
-                  1h
-                </button>
-                <button class="shortcut-btn" @click="setTimeShortcut(24)">
-                  24h
-                </button>
-                <button class="shortcut-btn" @click="setTimeShortcut(168)">
-                  7d
-                </button>
-              </div>
-            </div>
-            <div class="time-inputs" :class="{ error: timeError }">
-              <div class="time-field">
-                <span>开始</span>
-                <input
-                  type="datetime-local"
-                  step="1"
-                  v-model="startTime"
-                  @change="validateTime"
-                />
-              </div>
-              <div class="time-field">
-                <span>结束</span>
-                <input
-                  type="datetime-local"
-                  step="1"
-                  v-model="endTime"
-                  @change="validateTime"
-                />
-              </div>
-            </div>
-            <div v-if="timeError" class="time-error-msg">
-              开始时间不能晚于结束时间
-            </div>
-          </div>
-
-          <!-- Module 5: Quick Actions -->
-          <div
-            class="dashboard-card quick-module"
-            style="
-              flex: 1 1 0;
-              min-height: 0;
-              display: flex;
-              flex-direction: column;
-            "
-          >
+          <!-- Module 4: Quick Actions -->
+          <div class="dashboard-card quick-module" style="flex: 0 0 auto">
             <div class="module-header">
               <h4>快速操作</h4>
             </div>
@@ -1489,6 +1467,21 @@ const setCategoryHover = (name) => {
               <button class="tool-btn" title="截图">📷 截图</button>
               <button class="tool-btn" title="录屏">🎥 录屏</button>
               <button class="tool-btn" title="设置">⚙️ 设置</button>
+            </div>
+          </div>
+
+          <!-- Module 5: Connection Status -->
+          <div class="dashboard-card conn-module" style="flex: 1 1 0; min-height: 0">
+            <div class="module-header">
+              <h4>连接状态</h4>
+              <span class="conn-summary">{{ connOnlineCount }}/{{ connList.length }} 在线</span>
+            </div>
+            <div class="conn-list">
+              <div v-for="c in connList" :key="c.name" class="conn-row">
+                <span class="conn-dot" :class="c.status"></span>
+                <span class="conn-name">{{ c.name }}</span>
+                <span class="conn-latency" :class="c.status">{{ c.label }}</span>
+              </div>
             </div>
           </div>
         </div>

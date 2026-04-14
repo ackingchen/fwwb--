@@ -837,4 +837,51 @@ input:checked + .slider:before {
     display: none;
   }
 }
+
+/* Light theme overrides */
+[data-theme="light"] .settings-sidebar {
+  background: rgba(0, 0, 0, 0.02);
+  border-right-color: var(--line);
+}
+[data-theme="light"] .nav-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .nav-btn.active {
+  background: rgba(59, 125, 224, 0.1);
+}
+[data-theme="light"] .sidebar-footer {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .version-tag {
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .settings-header {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .reset-btn {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+[data-theme="light"] .panel {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .switch-row {
+  border-bottom-color: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .slider {
+  background-color: rgba(0, 0, 0, 0.12);
+}
+[data-theme="light"] .device-item,
+[data-theme="light"] .info-card {
+  background: rgba(0, 0, 0, 0.02);
+}
+[data-theme="light"] .dev-icon {
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .log-viewer {
+  background: rgba(0, 0, 0, 0.03);
+}
+[data-theme="light"] .sys-log-row {
+  border-bottom-color: rgba(0, 0, 0, 0.04);
+}
 </style>

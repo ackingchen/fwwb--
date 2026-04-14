@@ -54,23 +54,6 @@ describe("DashboardView", () => {
     expect(toggleBtn.text()).toBe("开始检测");
   });
 
-  it("validates time range correctly", async () => {
-    const wrapper = mount(DashboardView);
-
-    // Test shortcut
-    const shortcutBtns = wrapper.findAll(".shortcut-btn");
-    await shortcutBtns[0].trigger("click"); // 1h
-
-    expect(wrapper.vm.timeError).toBe(false);
-
-    // Manually set invalid time
-    wrapper.vm.startTime = "2026-03-12T12:00:00";
-    wrapper.vm.endTime = "2026-03-11T12:00:00";
-    wrapper.vm.validateTime();
-
-    expect(wrapper.vm.timeError).toBe(true);
-  });
-
   it("shows empty state when no media source is connected", () => {
     const wrapper = mount(DashboardView);
     expect(wrapper.find(".empty-state-overlay").exists()).toBe(true);
