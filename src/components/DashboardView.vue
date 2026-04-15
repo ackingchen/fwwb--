@@ -570,7 +570,7 @@ const detectImage = async () => {
     const formData = new FormData();
     formData.append("file", imageFile.value);
 
-    const response = await fetch("http://10.21.196.142:8080/detections/image", {
+    const response = await fetch("http://10.21.204.210:8080/detections/image", {
       method: "POST",
       body: formData,
     });
@@ -615,14 +615,34 @@ const handleResize = () => {
   if (activeMode.value === "image" && localImg.value) onLocalImageLoaded();
 };
 
+// --- Fullscreen ---
+const videoStageRef = ref(null);
+const isFullscreen = ref(false);
+
+const toggleFullscreen = () => {
+  if (!videoStageRef.value) return;
+  if (!document.fullscreenElement) {
+    videoStageRef.value.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+};
+
+const onFullscreenChange = () => {
+  isFullscreen.value = !!document.fullscreenElement;
+  setTimeout(() => handleResize(), 50);
+};
+
 onActivated(() => {
   window.addEventListener("resize", handleResize);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
   setTimeout(() => handleResize(), 0);
   startApiCheck();
 });
 
 onDeactivated(() => {
   window.removeEventListener("resize", handleResize);
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
   stopApiCheck();
 });
 
@@ -634,6 +654,7 @@ onUnmounted(() => {
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value);
   if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
   window.removeEventListener("resize", handleResize);
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
   window.removeEventListener("online", handleOnline);
   window.removeEventListener("offline", handleOffline);
   stopApiCheck();
@@ -896,24 +917,14 @@ const setCategoryHover = (name) => {
   <div class="dashboard-screen">
     <div class="hero-layout">
       <!-- Left Column: Video Monitoring Area (65%) -->
-      <div
-        class="video-section"
-        style="display: flex; flex-direction: column; height: 100%"
-      >
-        <div
-          class="panel video-card"
-          style="
-            flex: 1 1 0;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-          "
-        >
+      <div class="video-section">
+        <div class="panel video-card">
           <div class="section-title">
             <h3>实时检测画面</h3>
           </div>
 
           <div
+            ref="videoStageRef"
             class="video-stage board-style"
             style="
               flex: 1 1 0;
@@ -1152,6 +1163,42 @@ const setCategoryHover = (name) => {
               }}
               | 1920x1080 | {{ summary.latency }}ms
             </div>
+
+            <!-- Fullscreen Toggle Button -->
+            <button
+              class="fullscreen-btn"
+              @click="toggleFullscreen"
+              :title="isFullscreen ? '退出全屏' : '全屏显示'"
+            >
+              <svg
+                v-if="!isFullscreen"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <polyline points="9 21 3 21 3 15"></polyline>
+                <line x1="21" y1="3" x2="14" y2="10"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+              <svg
+                v-else
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="4 14 10 14 10 20"></polyline>
+                <polyline points="20 10 14 10 14 4"></polyline>
+                <line x1="14" y1="10" x2="21" y2="3"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+            </button>
           </div>
 
           <!-- Integrated Lower Grid inside Video Section -->
@@ -1168,7 +1215,9 @@ const setCategoryHover = (name) => {
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">推理耗时</span>
-                  <strong class="model-info-value highlight">{{ summary.latency }}ms</strong>
+                  <strong class="model-info-value highlight"
+                    >{{ summary.latency }}ms</strong
+                  >
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">输入尺寸</span>
@@ -1250,20 +1299,8 @@ const setCategoryHover = (name) => {
       </div>
 
       <!-- Right Column: Functional Control Area (35%) -->
-      <div
-        class="control-section"
-        style="display: flex; flex-direction: column; height: 100%"
-      >
-        <div
-          class="control-grid"
-          style="
-            flex: 1 1 0;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            min-height: 0;
-          "
-        >
+      <div class="control-section">
+        <div class="control-grid">
           <!-- Module 1: System Control & Status -->
           <div class="dashboard-card control-module" style="flex: 0 0 auto">
             <div class="module-header">
@@ -1518,16 +1555,23 @@ const setCategoryHover = (name) => {
           </div>
 
           <!-- Module 5: Connection Status -->
-          <div class="dashboard-card conn-module" style="flex: 1 1 0; min-height: 0">
+          <div
+            class="dashboard-card conn-module"
+            style="flex: 1 1 0; min-height: 0"
+          >
             <div class="module-header">
               <h4>连接状态</h4>
-              <span class="conn-summary">{{ connOnlineCount }}/{{ connList.length }} 在线</span>
+              <span class="conn-summary"
+                >{{ connOnlineCount }}/{{ connList.length }} 在线</span
+              >
             </div>
             <div class="conn-list">
               <div v-for="c in connList" :key="c.name" class="conn-row">
                 <span class="conn-dot" :class="c.status"></span>
                 <span class="conn-name">{{ c.name }}</span>
-                <span class="conn-latency" :class="c.status">{{ c.label }}</span>
+                <span class="conn-latency" :class="c.status">{{
+                  c.label
+                }}</span>
               </div>
             </div>
           </div>

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useDataStore } from "./stores/useDataStore";
 import { useConfigStore } from "./stores/useConfigStore";
 import { storeToRefs } from "pinia";
+import AiAssistant from "./components/AiAssistant.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -162,6 +163,8 @@ onUnmounted(() => {
         </transition>
       </router-view>
     </main>
+
+    <AiAssistant />
   </div>
 </template>
 
