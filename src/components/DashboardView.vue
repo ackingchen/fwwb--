@@ -618,10 +618,12 @@ const handleResize = () => {
 onActivated(() => {
   window.addEventListener("resize", handleResize);
   setTimeout(() => handleResize(), 0);
+  startApiCheck();
 });
 
 onDeactivated(() => {
   window.removeEventListener("resize", handleResize);
+  stopApiCheck();
 });
 
 onUnmounted(() => {
@@ -634,6 +636,7 @@ onUnmounted(() => {
   window.removeEventListener("resize", handleResize);
   window.removeEventListener("online", handleOnline);
   window.removeEventListener("offline", handleOffline);
+  stopApiCheck();
 });
 
 // Time Range State (Upgraded to datetime-local)
@@ -667,12 +670,6 @@ const validateTime = () => {
   }
 };
 
-const levelText = {
-  normal: "正常",
-  warning: "预警",
-  danger: "高危",
-};
-
 const categoryTree = [
   {
     key: "all",
@@ -694,6 +691,48 @@ const categoryColorMap = {
   动物: "#a56af5",
 };
 
+// --- Connection Status Logic ---
+const API_BASE = "http://10.21.196.142:8080";
+const apiStatus = ref("unknown"); // 'ok', 'off', 'unknown'
+const apiLatency = ref(0);
+let apiCheckTimer = null;
+
+async function checkApiHealth() {
+  if (isOffline.value) {
+    apiStatus.value = "off";
+    apiLatency.value = 0;
+    return;
+  }
+  const start = performance.now();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    await fetch(`${API_BASE}/`, {
+      method: "HEAD",
+      mode: "no-cors",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    apiLatency.value = Math.round(performance.now() - start);
+    apiStatus.value = "ok";
+  } catch {
+    apiStatus.value = "off";
+    apiLatency.value = 0;
+  }
+}
+
+function startApiCheck() {
+  checkApiHealth();
+  apiCheckTimer = setInterval(checkApiHealth, 5000);
+}
+
+function stopApiCheck() {
+  if (apiCheckTimer) {
+    clearInterval(apiCheckTimer);
+    apiCheckTimer = null;
+  }
+}
+
 const connList = computed(() => [
   {
     name: "WebSocket 实时流",
@@ -707,8 +746,13 @@ const connList = computed(() => [
   },
   {
     name: "后端 API",
-    status: isOffline.value ? "off" : "ok",
-    label: isOffline.value ? "离线" : "在线",
+    status: apiStatus.value === "ok" ? "ok" : "off",
+    label:
+      apiStatus.value === "ok"
+        ? `${apiLatency.value}ms`
+        : apiStatus.value === "unknown"
+          ? "检测中..."
+          : "不可达",
   },
   {
     name: "网络状态",
@@ -1110,26 +1154,29 @@ const setCategoryHover = (name) => {
             </div>
           </div>
 
-          <!-- Integrated Lower Grid (Alerts/Stats) inside Video Section -->
+          <!-- Integrated Lower Grid inside Video Section -->
           <div class="video-lower-grid">
             <div
-              class="subpanel"
+              class="subpanel model-info-module"
               style="height: 100%; display: flex; flex-direction: column"
             >
-              <div class="subpanel-title">实时告警</div>
-              <div class="alert-list">
-                <div
-                  v-for="item in detections.slice(0, 3)"
-                  :key="`${item.id}-alert`"
-                  class="alert-item"
-                >
-                  <span :class="['alert-mark', item.level]"></span>
-                  <div>
-                    <strong>{{ item.label }}</strong>
-                    <p>
-                      {{ item.timestamp }} / {{ Math.round(item.score * 100) }}%
-                    </p>
-                  </div>
+              <div class="subpanel-title">模型信息</div>
+              <div class="model-info-list">
+                <div class="model-info-row">
+                  <span class="model-info-label">模型</span>
+                  <strong class="model-info-value">{{ selectedModel }}</strong>
+                </div>
+                <div class="model-info-row">
+                  <span class="model-info-label">推理耗时</span>
+                  <strong class="model-info-value highlight">{{ summary.latency }}ms</strong>
+                </div>
+                <div class="model-info-row">
+                  <span class="model-info-label">输入尺寸</span>
+                  <strong class="model-info-value">640×640</strong>
+                </div>
+                <div class="model-info-row">
+                  <span class="model-info-label">精度模式</span>
+                  <strong class="model-info-value">FP16</strong>
                 </div>
               </div>
             </div>
@@ -1648,7 +1695,6 @@ const setCategoryHover = (name) => {
               <th>类别</th>
               <th>置信度</th>
               <th>坐标位置</th>
-              <th>风险等级</th>
             </tr>
           </thead>
           <tbody>
@@ -1658,11 +1704,6 @@ const setCategoryHover = (name) => {
               <td>{{ item.label }}</td>
               <td>{{ Math.round(item.score * 100) }}%</td>
               <td>{{ item.bbox.join(", ") }}</td>
-              <td>
-                <span :class="['pill', item.level]">{{
-                  levelText[item.level]
-                }}</span>
-              </td>
             </tr>
           </tbody>
         </table>

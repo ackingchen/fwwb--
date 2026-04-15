@@ -6,7 +6,6 @@ export const detectionFeed = [
     score: 0.94,
     bbox: [18, 28, 16, 24],
     timestamp: "14:31:08",
-    level: "danger",
   },
   {
     id: "D-02",
@@ -15,7 +14,6 @@ export const detectionFeed = [
     score: 0.88,
     bbox: [56, 44, 20, 12],
     timestamp: "14:31:08",
-    level: "warning",
   },
   {
     id: "D-03",
@@ -24,7 +22,6 @@ export const detectionFeed = [
     score: 0.79,
     bbox: [72, 18, 14, 18],
     timestamp: "14:31:09",
-    level: "warning",
   },
   {
     id: "D-04",
@@ -33,7 +30,6 @@ export const detectionFeed = [
     score: 0.84,
     bbox: [34, 62, 12, 16],
     timestamp: "14:31:10",
-    level: "normal",
   },
 ];
 
@@ -48,12 +44,10 @@ export const metricsSummary = {
   latency: 36,
   jitter: 4.6,
   throughput: 946,
-  falseAlarmRate: 6.1,
   missRate: 4.4,
   stability: 97.2,
   totalFrames: 28450,
   totalTargets: 9623,
-  totalWarnings: 438,
   activeTargets: 4,
   avgScore: 86.2,
   avgInference: 28.9,
@@ -69,7 +63,7 @@ export const metricSeries = {
       f1: 91.8,
       support: 3128,
       missRate: 3.7,
-      falseAlarm: 4.2,
+
     },
     {
       name: "车辆",
@@ -79,7 +73,7 @@ export const metricSeries = {
       f1: 87.7,
       support: 2760,
       missRate: 5.8,
-      falseAlarm: 6.4,
+
     },
     {
       name: "动物",
@@ -89,7 +83,7 @@ export const metricSeries = {
       f1: 83.8,
       support: 1846,
       missRate: 7.3,
-      falseAlarm: 8.1,
+
     },
     {
       name: "设施",
@@ -99,7 +93,6 @@ export const metricSeries = {
       f1: 80.5,
       support: 1889,
       missRate: 9.2,
-      falseAlarm: 9.8,
     },
   ],
   sceneComparison: [
@@ -110,7 +103,7 @@ export const metricSeries = {
       map50: 86.7,
       fps: 30.2,
       latency: 31,
-      warningRate: 7.4,
+
       samples: 4680,
     },
     {
@@ -120,7 +113,7 @@ export const metricSeries = {
       map50: 84.9,
       fps: 28.4,
       latency: 35,
-      warningRate: 4.8,
+
       samples: 3820,
     },
     {
@@ -130,7 +123,6 @@ export const metricSeries = {
       map50: 72.3,
       fps: 25.8,
       latency: 42,
-      warningRate: 10.6,
       samples: 2610,
     },
     {
@@ -140,16 +132,20 @@ export const metricSeries = {
       map50: 69.5,
       fps: 24.7,
       latency: 45,
-      warningRate: 11.8,
       samples: 2010,
     },
   ],
   prCurve: [
-    [0, 0.96],
+    [0, 0.97],
+    [0.1, 0.96],
     [0.2, 0.94],
+    [0.3, 0.92],
     [0.4, 0.9],
+    [0.5, 0.88],
     [0.6, 0.85],
+    [0.7, 0.81],
     [0.8, 0.75],
+    [0.9, 0.68],
     [1, 0.62],
   ],
   iouMetrics: [
@@ -159,61 +155,46 @@ export const metricSeries = {
     { iou: "0.65", map: 75.3, precision: 88.1, recall: 84.2 },
     { iou: "0.70", map: 72.2, precision: 86.5, recall: 82.1 },
     { iou: "0.75", map: 68.4, precision: 84.2, recall: 79.6 },
+    { iou: "0.80", map: 63.8, precision: 82.0, recall: 76.8 },
+    { iou: "0.85", map: 58.2, precision: 79.5, recall: 73.1 },
+    { iou: "0.90", map: 51.6, precision: 76.3, recall: 68.4 },
+    { iou: "0.95", map: 42.1, precision: 72.8, recall: 62.5 },
   ],
   fpsTrend: [
-    26.4, 27.1, 27.8, 28.3, 27.6, 28.1, 29, 28.7, 27.9, 28.4, 28.8, 27.8,
+    25.8, 26.4, 27.1, 27.8, 28.3, 27.6, 28.1, 29.0, 28.7, 27.9, 28.4, 28.8,
+    27.8, 28.2, 29.1, 28.5, 27.4, 28.0, 28.6, 27.3,
   ],
-  latencyTrend: [39, 37, 36, 34, 35, 33, 32, 34, 35, 33, 32, 36],
+  latencyTrend: [
+    41, 39, 37, 36, 34, 35, 33, 32, 34, 35, 33, 32,
+    36, 34, 31, 33, 37, 35, 33, 38,
+  ],
   confidenceBands: [
+    { threshold: 0.30, precision: 79.5, recall: 95.8, f1: 86.9 },
     { threshold: 0.35, precision: 82.1, recall: 94.2, f1: 87.7 },
+    { threshold: 0.40, precision: 84.6, recall: 93.5, f1: 88.8 },
     { threshold: 0.45, precision: 86.8, recall: 92.7, f1: 89.6 },
+    { threshold: 0.50, precision: 88.4, recall: 91.3, f1: 89.8 },
     { threshold: 0.55, precision: 90.1, recall: 89.8, f1: 89.9 },
+    { threshold: 0.60, precision: 91.5, recall: 87.6, f1: 89.5 },
     { threshold: 0.65, precision: 92.6, recall: 85.2, f1: 88.8 },
+    { threshold: 0.70, precision: 93.8, recall: 82.1, f1: 87.6 },
     { threshold: 0.75, precision: 95.4, recall: 77.6, f1: 85.6 },
+    { threshold: 0.80, precision: 96.5, recall: 72.3, f1: 82.7 },
+    { threshold: 0.85, precision: 97.2, recall: 65.8, f1: 78.5 },
   ],
   hourlyQuality: [
-    {
-      period: "09:00-10:00",
-      targets: 812,
-      warnings: 36,
-      avgScore: 87.1,
-      map50: 83.6,
-    },
-    {
-      period: "10:00-11:00",
-      targets: 954,
-      warnings: 41,
-      avgScore: 88.5,
-      map50: 84.1,
-    },
-    {
-      period: "11:00-12:00",
-      targets: 1022,
-      warnings: 45,
-      avgScore: 86.9,
-      map50: 82.8,
-    },
-    {
-      period: "12:00-13:00",
-      targets: 738,
-      warnings: 28,
-      avgScore: 85.4,
-      map50: 81.2,
-    },
-    {
-      period: "13:00-14:00",
-      targets: 1108,
-      warnings: 52,
-      avgScore: 87.8,
-      map50: 83.9,
-    },
-    {
-      period: "14:00-15:00",
-      targets: 1236,
-      warnings: 61,
-      avgScore: 88.2,
-      map50: 84.5,
-    },
+    { period: "06:00-07:00", targets: 324, avgScore: 82.3, map50: 78.1 },
+    { period: "07:00-08:00", targets: 518, avgScore: 84.6, map50: 80.4 },
+    { period: "08:00-09:00", targets: 692, avgScore: 86.2, map50: 82.1 },
+    { period: "09:00-10:00", targets: 812, avgScore: 87.1, map50: 83.6 },
+    { period: "10:00-11:00", targets: 954, avgScore: 88.5, map50: 84.1 },
+    { period: "11:00-12:00", targets: 1022, avgScore: 86.9, map50: 82.8 },
+    { period: "12:00-13:00", targets: 738, avgScore: 85.4, map50: 81.2 },
+    { period: "13:00-14:00", targets: 1108, avgScore: 87.8, map50: 83.9 },
+    { period: "14:00-15:00", targets: 1236, avgScore: 88.2, map50: 84.5 },
+    { period: "15:00-16:00", targets: 1085, avgScore: 87.5, map50: 83.2 },
+    { period: "16:00-17:00", targets: 946, avgScore: 86.8, map50: 82.6 },
+    { period: "17:00-18:00", targets: 672, avgScore: 84.9, map50: 80.8 },
   ],
 };
 
@@ -225,7 +206,7 @@ export const taskList = [
     source: "drone-cam-01",
     createdAt: "2026-03-11 14:31",
     targetCount: 18,
-    warningCount: 3,
+
     fps: 28.1,
     map50: 83.1,
     status: "running",
@@ -237,7 +218,7 @@ export const taskList = [
     source: "video-demo-02",
     createdAt: "2026-03-11 11:08",
     targetCount: 42,
-    warningCount: 6,
+
     fps: 30.4,
     map50: 85.7,
     status: "finished",
@@ -249,7 +230,7 @@ export const taskList = [
     source: "video-demo-03",
     createdAt: "2026-03-10 17:20",
     targetCount: 26,
-    warningCount: 2,
+
     fps: 26.2,
     map50: 80.8,
     status: "finished",

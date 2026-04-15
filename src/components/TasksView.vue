@@ -29,7 +29,6 @@ function selectTask(id) {
             <th>输入源</th>
             <th>时间</th>
             <th>目标数</th>
-            <th>告警数</th>
             <th>FPS</th>
             <th>mAP</th>
             <th>状态</th>
@@ -47,7 +46,6 @@ function selectTask(id) {
             <td>{{ task.source }}</td>
             <td>{{ task.createdAt }}</td>
             <td>{{ task.targetCount }}</td>
-            <td>{{ task.warningCount }}</td>
             <td>{{ task.fps }}</td>
             <td>{{ task.map50 }}%</td>
             <td><span :class="['pill', task.status]">{{ task.status }}</span></td>

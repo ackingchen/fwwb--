@@ -63,11 +63,6 @@ const coreMetrics = computed(() => [
     value: `${summary.value.throughput} obj/min`,
     note: "每分钟处理目标数",
   },
-  {
-    label: "False Alarm",
-    value: `${summary.value.falseAlarmRate}%`,
-    note: "误报率",
-  },
   { label: "Miss Rate", value: `${summary.value.missRate}%`, note: "漏检率" },
 ]);
 
@@ -77,7 +72,7 @@ const lastUpdated = ref(new Date());
 const refreshKey = ref(0);
 
 const pageIndex = ref(0);
-const pageSize = 4;
+const pageSize = 6;
 const totalPages = computed(() =>
   Math.ceil(localSeries.value.hourlyQuality.length / pageSize),
 );
@@ -100,10 +95,6 @@ const refreshMetrics = () => {
     targets: Math.max(
       0,
       Math.round(item.targets * (0.94 + Math.random() * 0.12)),
-    ),
-    warnings: Math.max(
-      0,
-      Math.round(item.warnings * (0.92 + Math.random() * 0.16)),
     ),
     avgScore: Math.max(
       0,
@@ -410,12 +401,6 @@ const buildChartOptions = () => {
         data: hourlyQuality.map((item) => item.targets),
       },
       {
-        name: "告警数",
-        type: "bar",
-        label: { show: true, position: "top", color: "#9cb6db", fontSize: 10 },
-        data: hourlyQuality.map((item) => item.warnings),
-      },
-      {
         name: "mAP@0.5",
         type: "line",
         smooth: true,
@@ -519,10 +504,6 @@ watch([refreshKey, pageIndex], updateCharts);
         <div class="kpi-pill">
           <span>累计检测目标</span>
           <strong>{{ summary.totalTargets }}</strong>
-        </div>
-        <div class="kpi-pill">
-          <span>累计告警</span>
-          <strong>{{ summary.totalWarnings }}</strong>
         </div>
         <div class="kpi-pill">
           <span>平均置信度</span>
