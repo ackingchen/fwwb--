@@ -16,7 +16,7 @@ import axios from "axios";
 const configStore = useConfigStore();
 const dataStore = useDataStore();
 
-const { confidence, iou, selectedModel, enabledLabels } =
+const { confidence, iou, selectedModel, enabledLabels, backendIp, httpBase, wsBase } =
   storeToRefs(configStore);
 const {
   filteredDetections: detections,
@@ -25,6 +25,19 @@ const {
   series,
   resources,
 } = storeToRefs(dataStore);
+
+// Backend IP editing
+const ipInput = ref(backendIp.value);
+const ipSaved = ref(false);
+const saveBackendIp = () => {
+  const trimmed = ipInput.value.trim();
+  if (!trimmed) return;
+  configStore.setBackendIp(trimmed);
+  ipSaved.value = true;
+  // Update stream WS address to use new IP
+  streamWsAddr.value = `ws://${trimmed}/stream-detect`;
+  setTimeout(() => { ipSaved.value = false; }, 1500);
+};
 
 // Mock state for new controls
 const systemStatus = ref("running"); // running, stopped
@@ -51,7 +64,7 @@ const activeMode = ref("stream"); // 'stream', 'video', 'image'
 const detectCanvas = ref(null);
 
 // Mode: Stream
-const streamWsAddr = ref("ws://10.21.196.142:8080/stream-detect");
+const streamWsAddr = ref(`ws://${backendIp.value}/stream-detect`);
 const streamRtspUrl = ref("");
 const streamConnected = ref(false);
 const streamBase64 = ref("");
@@ -360,7 +373,7 @@ const startVideoUpload = async () => {
     formData.append("file", file, file.name);
 
     const response = await axios.post(
-      "http://10.21.196.142:8080/detections/video",
+      `${httpBase.value}/detections/video`,
       formData,
       {
         signal: uploadCancelController.signal,
@@ -436,7 +449,7 @@ const toggleVideoDetection = () => {
   }
 
   try {
-    videoWs = new WebSocket("ws://10.21.196.142:8080/video-detect");
+    videoWs = new WebSocket(`${wsBase.value}/video-detect`);
     videoWs.onopen = () => {
       videoConnected.value = true;
       mediaError.value = "";
@@ -570,7 +583,7 @@ const detectImage = async () => {
     const formData = new FormData();
     formData.append("file", imageFile.value);
 
-    const response = await fetch("http://10.21.204.210:8080/detections/image", {
+    const response = await fetch(`${httpBase.value}/detections/image`, {
       method: "POST",
       body: formData,
     });
@@ -713,7 +726,7 @@ const categoryColorMap = {
 };
 
 // --- Connection Status Logic ---
-const API_BASE = "http://10.21.196.142:8080";
+const API_BASE = computed(() => httpBase.value);
 const apiStatus = ref("unknown"); // 'ok', 'off', 'unknown'
 const apiLatency = ref(0);
 let apiCheckTimer = null;
@@ -728,7 +741,7 @@ async function checkApiHealth() {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    await fetch(`${API_BASE}/`, {
+    await fetch(`${API_BASE.value}/`, {
       method: "HEAD",
       mode: "no-cors",
       signal: controller.signal,
@@ -950,11 +963,13 @@ const setCategoryHover = (name) => {
               ref="streamImg"
               @load="onStreamImageLoaded"
               style="
-                max-width: 100%;
-                max-height: 100%;
+                width: 100%;
+                height: 100%;
                 object-fit: contain;
                 z-index: 10;
                 position: absolute;
+                top: 0;
+                left: 0;
               "
             />
 
@@ -964,11 +979,13 @@ const setCategoryHover = (name) => {
               ref="localVideo"
               controls
               style="
-                max-width: 100%;
-                max-height: 100%;
+                width: 100%;
+                height: 100%;
                 object-fit: contain;
                 z-index: 10;
                 position: absolute;
+                top: 0;
+                left: 0;
               "
               @play="onVideoPlay"
               @pause="onVideoPause"
@@ -981,11 +998,13 @@ const setCategoryHover = (name) => {
               ref="localImg"
               @load="onLocalImageLoaded"
               style="
-                max-width: 100%;
-                max-height: 100%;
+                width: 100%;
+                height: 100%;
                 object-fit: contain;
                 z-index: 10;
                 position: absolute;
+                top: 0;
+                left: 0;
               "
             />
 
@@ -1353,6 +1372,24 @@ const setCategoryHover = (name) => {
                 />
               </label>
             </div>
+            <div class="backend-ip-config">
+              <div class="slider-head">
+                <span>后端地址</span>
+                <strong v-if="ipSaved" style="color: #41d98f; font-size: 12px">已保存</strong>
+              </div>
+              <div class="ip-input-row">
+                <input
+                  type="text"
+                  class="control-input"
+                  v-model="ipInput"
+                  placeholder="如: 10.21.204.210:8080"
+                  @keyup.enter="saveBackendIp"
+                />
+                <button class="action-btn primary" @click="saveBackendIp" style="white-space: nowrap; padding: 6px 14px;">
+                  保存
+                </button>
+              </div>
+            </div>
           </div>
 
           <!-- Module 2: Category Filter (Tree) -->
@@ -1422,7 +1459,7 @@ const setCategoryHover = (name) => {
                 <input
                   v-model="streamWsAddr"
                   class="control-input"
-                  placeholder="WebSocket 地址 (如: ws://10.21.196.142:8080/...)"
+                  :placeholder="`WebSocket 地址 (如: ws://${backendIp}/...)`"
                 />
                 <input
                   v-model="streamRtspUrl"

@@ -1,7 +1,19 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 
 export const useConfigStore = defineStore('config', () => {
+  // Backend API IP Management (persisted to localStorage)
+  const savedIp = localStorage.getItem('backend_ip') || '10.21.204.210:8080';
+  const backendIp = ref(savedIp);
+
+  const setBackendIp = (ip) => {
+    backendIp.value = ip;
+    localStorage.setItem('backend_ip', ip);
+  };
+
+  const httpBase = computed(() => `http://${backendIp.value}`);
+  const wsBase = computed(() => `ws://${backendIp.value}`);
+
   // Detection Settings
   const confidence = ref(0.62);
   const iou = ref(0.48);
@@ -40,6 +52,10 @@ export const useConfigStore = defineStore('config', () => {
   };
 
   return {
+    backendIp,
+    setBackendIp,
+    httpBase,
+    wsBase,
     confidence,
     iou,
     selectedModel,

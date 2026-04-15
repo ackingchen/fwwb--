@@ -720,6 +720,24 @@ label span,
   gap: 12px;
 }
 
+.backend-ip-config {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.ip-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.ip-input-row .control-input {
+  flex: 1;
+  min-width: 0;
+}
+
 .slider-field.compact {
   gap: 4px;
 }
