@@ -1,7 +1,7 @@
 <script setup>
 import { useConfigStore } from "../stores/useConfigStore";
 import { storeToRefs } from "pinia";
-import { ref, reactive, computed } from "vue";
+import { ref, watch, onActivated, onDeactivated, onUnmounted } from "vue";
 import {
   loginHistory as mockLoginHistory,
   deviceList as mockDeviceList,
@@ -17,7 +17,20 @@ const {
   language,
   autoUpdate,
   notifications,
+  backendIp,
+  httpBase,
 } = storeToRefs(configStore);
+
+// Backend IP editing
+const ipInput = ref(backendIp.value);
+const ipSaved = ref(false);
+const saveBackendIp = () => {
+  const trimmed = ipInput.value.trim();
+  if (!trimmed) return;
+  configStore.setBackendIp(trimmed);
+  ipSaved.value = true;
+  setTimeout(() => { ipSaved.value = false; }, 1500);
+};
 
 // Mock System Info
 const systemInfo = {
@@ -37,6 +50,153 @@ const showSaveError = ref(false);
 const loginHistory = ref([...mockLoginHistory]);
 const deviceList = ref([...mockDeviceList]);
 const systemLogs = ref([...mockSystemLogs]);
+
+const LOG_POLL_INTERVAL = 5000;
+const LOG_PAGE_SIZE = 50;
+const LOG_ENDPOINT_PATHS = ["/system/logs", "/api/v1/system/logs"];
+let logTimer = null;
+let resolvedLogPath = "";
+let logFetching = false;
+const logsLoading = ref(false);
+const logsError = ref("");
+const logsUpdatedAt = ref("");
+
+const formatLogTime = (value) => {
+  if (value === null || value === undefined || value === "") return "--";
+  if (typeof value === "number") {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleString("zh-CN", { hour12: false });
+    }
+  }
+  return String(value);
+};
+
+const normalizeLogLevel = (value) => {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (["warning", "warn", "w"].includes(raw)) return "warning";
+  if (["error", "err", "e", "fatal"].includes(raw)) return "error";
+  if (["success", "ok", "done"].includes(raw)) return "success";
+  return "info";
+};
+
+const normalizeLogsPayload = (payload) => {
+  let list = [];
+  if (Array.isArray(payload)) {
+    list = payload;
+  } else if (Array.isArray(payload?.data)) {
+    list = payload.data;
+  } else if (Array.isArray(payload?.result)) {
+    list = payload.result;
+  } else if (Array.isArray(payload?.list)) {
+    list = payload.list;
+  } else if (Array.isArray(payload?.data?.list)) {
+    list = payload.data.list;
+  } else if (Array.isArray(payload?.data?.records)) {
+    list = payload.data.records;
+  } else if (Array.isArray(payload?.records)) {
+    list = payload.records;
+  }
+
+  return list.map((item, index) => ({
+    id: String(item.id ?? item.logId ?? item.log_id ?? `${Date.now()}-${index}`),
+    time: formatLogTime(
+      item.time ?? item.timestamp ?? item.createdAt ?? item.createTime ?? item.created_at,
+    ),
+    level: normalizeLogLevel(item.level ?? item.severity ?? item.type ?? item.logLevel),
+    message:
+      item.message ??
+      item.msg ??
+      item.content ??
+      item.description ??
+      JSON.stringify(item),
+  }));
+};
+
+const parseErrorMessage = async (response) => {
+  try {
+    const text = await response.text();
+    if (!text) return `HTTP ${response.status}`;
+    try {
+      const parsed = JSON.parse(text);
+      return parsed?.message || parsed?.msg || text;
+    } catch {
+      return text;
+    }
+  } catch {
+    return `HTTP ${response.status}`;
+  }
+};
+
+const requestLogsByPath = async (path) => {
+  const withQuery = `${httpBase.value}${path}?page=1&size=${LOG_PAGE_SIZE}`;
+  const withoutQuery = `${httpBase.value}${path}`;
+  const urls = [withQuery, withoutQuery];
+
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        const message = await parseErrorMessage(response);
+        throw new Error(message);
+      }
+      return await response.json();
+    } catch (error) {
+      lastErr = error;
+    }
+  }
+  throw lastErr || new Error("日志接口请求失败");
+};
+
+const fetchSystemLogs = async ({ silent = false } = {}) => {
+  if (logFetching) return;
+  logFetching = true;
+  if (!silent) logsLoading.value = true;
+  logsError.value = "";
+
+  try {
+    let payload = null;
+    if (resolvedLogPath) {
+      payload = await requestLogsByPath(resolvedLogPath);
+    } else {
+      let lastError = null;
+      for (const path of LOG_ENDPOINT_PATHS) {
+        try {
+          payload = await requestLogsByPath(path);
+          resolvedLogPath = path;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!payload) throw lastError || new Error("No available log endpoint");
+    }
+
+    systemLogs.value = normalizeLogsPayload(payload);
+    logsUpdatedAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  } catch (error) {
+    logsError.value =
+      error.message === "Failed to fetch"
+        ? "Log service unreachable, please check backend connectivity"
+        : `Failed to fetch logs: ${error.message}`;
+  } finally {
+    logFetching = false;
+    logsLoading.value = false;
+  }
+};
+
+const startLogPolling = () => {
+  if (logTimer) return;
+  fetchSystemLogs();
+  logTimer = setInterval(() => fetchSystemLogs({ silent: true }), LOG_POLL_INTERVAL);
+};
+
+const stopLogPolling = () => {
+  if (!logTimer) return;
+  clearInterval(logTimer);
+  logTimer = null;
+};
 
 const tabs = [
   { key: "detection", label: "模型与检测", icon: "🎯" },
@@ -101,6 +261,35 @@ function clearCache() {
     window.location.reload();
   }
 }
+
+watch(activeTab, (tab) => {
+  if (tab === "advanced") {
+    startLogPolling();
+  } else {
+    stopLogPolling();
+  }
+});
+
+watch(httpBase, () => {
+  resolvedLogPath = "";
+  if (activeTab.value === "advanced") {
+    fetchSystemLogs();
+  }
+});
+
+onActivated(() => {
+  if (activeTab.value === "advanced") {
+    startLogPolling();
+  }
+});
+
+onDeactivated(() => {
+  stopLogPolling();
+});
+
+onUnmounted(() => {
+  stopLogPolling();
+});
 </script>
 
 <template>
@@ -132,12 +321,10 @@ function clearCache() {
         <h2>{{ tabs.find((t) => t.key === activeTab)?.label }}</h2>
         <div class="header-actions">
           <transition name="fade">
-            <span v-if="showSaveSuccess" class="status-msg success"
-              >✓ 已保存</span
-            >
+            <span v-if="showSaveSuccess" class="status-msg success">已保存</span>
           </transition>
           <transition name="fade">
-            <span v-if="isSaving" class="status-msg saving">⟳ 保存中...</span>
+            <span v-if="isSaving" class="status-msg saving">保存中...</span>
           </transition>
           <button class="reset-btn" @click="handleReset">重置默认</button>
         </div>
@@ -207,6 +394,32 @@ function clearCache() {
             >
               {{ option.label }}
             </button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3>后端 API 地址</h3>
+            <transition name="fade">
+              <span v-if="ipSaved" class="status-msg success">已保存</span>
+            </transition>
+          </div>
+          <div class="form-grid">
+            <label class="form-item">
+              <span>服务器地址</span>
+              <div class="ip-input-row">
+                <input
+                  type="text"
+                  v-model="ipInput"
+                  placeholder="如: 10.21.204.210:8080"
+                  @keyup.enter="saveBackendIp"
+                />
+                <button class="action-btn primary" @click="saveBackendIp" style="white-space: nowrap;">
+                  保存
+                </button>
+              </div>
+              <small>格式: IP:端口，修改后所有后端请求将使用新地址，并保存到浏览器本地存储</small>
+            </label>
           </div>
         </div>
       </section>
@@ -384,14 +597,31 @@ function clearCache() {
         </div>
 
         <div class="panel full-width-panel">
-          <div class="panel-header"><h3>系统日志</h3></div>
+          <div class="panel-header">
+            <h3>系统日志</h3>
+            <div class="log-header-actions">
+              <span v-if="logsLoading" class="status-msg saving">同步中...</span>
+              <span v-else-if="logsUpdatedAt" class="status-msg saving"
+                >更新时间: {{ logsUpdatedAt }}</span
+              >
+              <button class="action-btn sm" @click="fetchSystemLogs()">
+                刷新
+              </button>
+            </div>
+          </div>
           <div class="log-viewer">
+            <div v-if="logsError" class="sys-log-empty" style="color: var(--danger)">
+              {{ logsError }}
+            </div>
             <div v-for="log in systemLogs" :key="log.id" class="sys-log-row">
               <span class="log-ts">{{ log.time }}</span>
               <span :class="['log-lvl', log.level]">{{
                 log.level.toUpperCase()
               }}</span>
               <span class="log-msg">{{ log.message }}</span>
+            </div>
+            <div v-if="!logsLoading && !logsError && systemLogs.length === 0" class="sys-log-empty">
+              暂无日志
             </div>
           </div>
         </div>
@@ -512,6 +742,12 @@ function clearCache() {
   gap: 16px;
 }
 
+.log-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .status-msg {
   font-size: 13px;
 }
@@ -521,6 +757,9 @@ function clearCache() {
 }
 .status-msg.saving {
   color: var(--muted);
+}
+.status-msg.error {
+  color: var(--danger);
 }
 
 .reset-btn {
@@ -580,6 +819,17 @@ function clearCache() {
 .form-item small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.ip-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ip-input-row input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Switches */
@@ -768,6 +1018,11 @@ input:checked + .slider:before {
   gap: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   padding-bottom: 4px;
+}
+
+.sys-log-empty {
+  color: var(--muted);
+  padding: 6px 0;
 }
 
 .log-ts {

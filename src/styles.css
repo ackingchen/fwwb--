@@ -575,6 +575,26 @@ label span,
   flex: 1 1 0;
   overflow-y: auto;
   min-height: 0;
+  max-height: 100%;
+  padding-right: 4px;
+}
+
+.log-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.log-list::-webkit-scrollbar-thumb {
+  background: rgba(79, 149, 255, 0.45);
+  border-radius: 999px;
+}
+
+.log-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 149, 255, 0.65);
 }
 
 .log-item {
@@ -589,6 +609,14 @@ label span,
   color: var(--muted);
   font-family: monospace;
   flex-shrink: 0;
+}
+
+.log-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .log-content.info {
@@ -2465,6 +2493,37 @@ input[type="range"] {
 
 .table-wrap {
   overflow: auto;
+}
+
+/* 检测结果滚动表格 - 最多显示10条 */
+.detection-table-scroll {
+  max-height: 380px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.detection-table-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.detection-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.detection-table-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.detection-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.detection-table-scroll thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
 }
 
 /* Ensure table fills width */

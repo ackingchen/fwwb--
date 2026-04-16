@@ -7,13 +7,22 @@ import {
   onDeactivated,
   ref,
   watch,
+  nextTick,
 } from "vue";
 import { useDataStore } from "../stores/useDataStore";
+import { useConfigStore } from "../stores/useConfigStore";
 import { storeToRefs } from "pinia";
 import * as echarts from "echarts";
 
 const dataStore = useDataStore();
+const configStore = useConfigStore();
 const { summary, series } = storeToRefs(dataStore);
+const { httpBase } = storeToRefs(configStore);
+
+// 后端数据加载状态
+const loading = ref(false);
+const fetchError = ref("");
+const useBackendData = ref(false); // 是否已从后端成功加载过数据
 
 const chartPalette = [
   "#4f95ff",
@@ -24,46 +33,20 @@ const chartPalette = [
   "#a56af5",
 ];
 
+const fmt = (v, suffix = '') => v === undefined ? '--' : `${v}${suffix}`;
+
 const coreMetrics = computed(() => [
-  {
-    label: "mAP@0.5",
-    value: `${summary.value.map50}%`,
-    note: "目标定位准确率",
-  },
-  {
-    label: "mAP@0.75",
-    value: `${summary.value.map75}%`,
-    note: "严格 IoU 指标",
-  },
-  {
-    label: "mAP@0.5:0.95",
-    value: `${summary.value.map5095}%`,
-    note: "综合检测能力",
-  },
-  {
-    label: "Precision",
-    value: `${summary.value.precision}%`,
-    note: "误报控制能力",
-  },
-  { label: "Recall", value: `${summary.value.recall}%`, note: "目标召回能力" },
-  {
-    label: "F1 Score",
-    value: `${summary.value.f1}%`,
-    note: "精确率召回率平衡",
-  },
-  { label: "FPS", value: `${summary.value.fps}`, note: "实时推理帧率" },
-  {
-    label: "Latency",
-    value: `${summary.value.latency} ms`,
-    note: "端到端时延",
-  },
-  { label: "Jitter", value: `${summary.value.jitter} ms`, note: "时延抖动" },
-  {
-    label: "Throughput",
-    value: `${summary.value.throughput} obj/min`,
-    note: "每分钟处理目标数",
-  },
-  { label: "Miss Rate", value: `${summary.value.missRate}%`, note: "漏检率" },
+  { label: "mAP@0.5", value: fmt(summary.value.map50, '%'), note: "目标定位准确率" },
+  { label: "mAP@0.75", value: fmt(summary.value.map75, '%'), note: "严格 IoU 指标" },
+  { label: "mAP@0.5:0.95", value: fmt(summary.value.map5095, '%'), note: "综合检测能力" },
+  { label: "Precision", value: fmt(summary.value.precision, '%'), note: "误报控制能力" },
+  { label: "Recall", value: fmt(summary.value.recall, '%'), note: "目标召回能力" },
+  { label: "F1 Score", value: fmt(summary.value.f1, '%'), note: "精确率召回率平衡" },
+  { label: "FPS", value: fmt(summary.value.fps), note: "实时推理帧率" },
+  { label: "Latency", value: fmt(summary.value.latency, ' ms'), note: "端到端时延" },
+  { label: "Jitter", value: fmt(summary.value.jitter, ' ms'), note: "时延抖动" },
+  { label: "Throughput", value: fmt(summary.value.throughput, ' obj/min'), note: "每分钟处理目标数" },
+  { label: "Miss Rate", value: fmt(summary.value.missRate, '%'), note: "漏检率" },
 ]);
 
 const cloneSeries = (data) => JSON.parse(JSON.stringify(data));
@@ -82,39 +65,55 @@ const pagedHourly = computed(() => {
   return localSeries.value.hourlyQuality.slice(start, start + pageSize);
 });
 
-const refreshMetrics = () => {
-  const next = cloneSeries(series.value);
-  next.fpsTrend = next.fpsTrend.map((value) =>
-    Math.max(0, +(value * (0.96 + Math.random() * 0.08)).toFixed(1)),
-  );
-  next.latencyTrend = next.latencyTrend.map((value) =>
-    Math.max(0, +(value * (0.96 + Math.random() * 0.08)).toFixed(1)),
-  );
-  next.hourlyQuality = next.hourlyQuality.map((item) => ({
-    ...item,
-    targets: Math.max(
-      0,
-      Math.round(item.targets * (0.94 + Math.random() * 0.12)),
-    ),
-    avgScore: Math.max(
-      0,
-      Math.min(
-        100,
-        +(item.avgScore * (0.97 + Math.random() * 0.06)).toFixed(1),
-      ),
-    ),
-    map50: Math.max(
-      0,
-      Math.min(
-        100,
-        +(item.map50 * (0.97 + Math.random() * 0.06)).toFixed(1),
-      ),
-    ),
-  }));
-  localSeries.value = next;
-  lastUpdated.value = new Date();
-  refreshKey.value += 1;
-  pageIndex.value = 0;
+const refreshMetrics = async () => {
+  loading.value = true;
+  fetchError.value = "";
+  try {
+    const response = await fetch(`${httpBase.value}/data/allData`);
+    if (!response.ok) throw new Error(`请求失败 (${response.status})`);
+    const data = await response.json();
+
+    // 更新 summary（核心指标）
+    if (data.summary) {
+      Object.assign(summary.value, data.summary);
+    }
+
+    // 更新 series（图表数据）
+    if (data.series) {
+      localSeries.value = data.series;
+    } else {
+      // 如果后端只返回扁平数据，尝试整体作为 series 使用
+      localSeries.value = data;
+    }
+
+    useBackendData.value = true;
+    lastUpdated.value = new Date();
+    refreshKey.value += 1;
+    pageIndex.value = 0;
+  } catch (error) {
+    console.error("获取指标数据失败:", error);
+    fetchError.value = error.message === "Failed to fetch"
+      ? "无法连接后端服务，请检查后端地址"
+      : error.message;
+
+    // 请求失败时将数据置为 undefined
+    const emptyKeys = ['precision', 'recall', 'map50', 'map75', 'map5095', 'f1', 'fps', 'latency', 'jitter', 'throughput', 'missRate', 'stability', 'totalFrames', 'totalTargets', 'avgScore'];
+    emptyKeys.forEach(key => { summary.value[key] = undefined; });
+
+    localSeries.value = {
+      classes: [],
+      sceneComparison: [],
+      prCurve: [],
+      iouMetrics: [],
+      fpsTrend: [],
+      latencyTrend: [],
+      confidenceBands: [],
+      hourlyQuality: [],
+    };
+    refreshKey.value += 1;
+  } finally {
+    loading.value = false;
+  }
 };
 
 const nextPage = () => {
@@ -433,7 +432,7 @@ const updateCharts = () => {
 
 let isActive = false;
 
-onMounted(() => {
+onMounted(async () => {
   initChart("classPie", classPieRef.value);
   initChart("sceneFunnel", sceneFunnelRef.value);
   initChart("prLine", prLineRef.value);
@@ -441,8 +440,10 @@ onMounted(() => {
   initChart("confidenceLine", confidenceLineRef.value);
   initChart("performanceLine", performanceLineRef.value);
   initChart("hourlyBar", hourlyBarRef.value);
+  // 先用 mock 数据渲染，再尝试从后端获取
   updateCharts();
-  // resize listener is managed by onActivated/onDeactivated to avoid double registration with keep-alive
+  await refreshMetrics();
+  updateCharts();
 });
 
 onActivated(() => {
@@ -481,8 +482,11 @@ watch([refreshKey, pageIndex], updateCharts);
       <div class="panel-header">
         <h3>核心指标总览</h3>
         <div class="panel-actions">
-          <span class="update-time">更新 {{ lastUpdatedText }}</span>
-          <button class="ghost-btn" @click="refreshMetrics">刷新数据</button>
+          <span v-if="fetchError" class="update-time" style="color: var(--danger)">{{ fetchError }}</span>
+          <span v-else class="update-time">{{ useBackendData ? '实时数据' : '本地数据' }} | 更新 {{ lastUpdatedText }}</span>
+          <button class="ghost-btn" @click="refreshMetrics" :disabled="loading">
+            {{ loading ? '加载中...' : '刷新数据' }}
+          </button>
         </div>
       </div>
       <div class="detailed-stat-grid">
@@ -499,19 +503,19 @@ watch([refreshKey, pageIndex], updateCharts);
       <div class="metrics-kpi-row">
         <div class="kpi-pill">
           <span>累计分析帧数</span>
-          <strong>{{ summary.totalFrames }}</strong>
+          <strong>{{ summary.totalFrames ?? '--' }}</strong>
         </div>
         <div class="kpi-pill">
           <span>累计检测目标</span>
-          <strong>{{ summary.totalTargets }}</strong>
+          <strong>{{ summary.totalTargets ?? '--' }}</strong>
         </div>
         <div class="kpi-pill">
           <span>平均置信度</span>
-          <strong>{{ summary.avgScore }}%</strong>
+          <strong>{{ summary.avgScore !== undefined ? summary.avgScore + '%' : '--' }}</strong>
         </div>
         <div class="kpi-pill">
           <span>稳定性</span>
-          <strong>{{ summary.stability }}%</strong>
+          <strong>{{ summary.stability !== undefined ? summary.stability + '%' : '--' }}</strong>
         </div>
       </div>
     </div>
@@ -647,7 +651,9 @@ watch([refreshKey, pageIndex], updateCharts);
         <h3>分时检测质量</h3>
         <div class="panel-actions">
           <span class="update-time">更新 {{ lastUpdatedText }}</span>
-          <button class="ghost-btn" @click="refreshMetrics">刷新数据</button>
+          <button class="ghost-btn" @click="refreshMetrics" :disabled="loading">
+            {{ loading ? '加载中...' : '刷新数据' }}
+          </button>
           <button class="ghost-btn" @click="exportChart('hourlyBar', 'png')">
             PNG
           </button>

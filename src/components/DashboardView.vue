@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { useConfigStore } from "../stores/useConfigStore";
 import { useDataStore } from "../stores/useDataStore";
 import { storeToRefs } from "pinia";
@@ -26,21 +26,85 @@ const {
   resources,
 } = storeToRefs(dataStore);
 
-// Backend IP editing
-const ipInput = ref(backendIp.value);
-const ipSaved = ref(false);
-const saveBackendIp = () => {
-  const trimmed = ipInput.value.trim();
-  if (!trimmed) return;
-  configStore.setBackendIp(trimmed);
-  ipSaved.value = true;
-  // Update stream WS address to use new IP
-  streamWsAddr.value = `ws://${trimmed}/stream-detect`;
-  setTimeout(() => { ipSaved.value = false; }, 1500);
-};
-
 // Mock state for new controls
 const systemStatus = ref("running"); // running, stopped
+
+// Frontend runtime logs for dashboard log module
+const frontendLogs = ref([]);
+const DASHBOARD_LOG_LIMIT = 120;
+
+const getLogTime = () =>
+  new Date().toLocaleTimeString("zh-CN", { hour12: false });
+
+const pushFrontendLog = (message, level = "info") => {
+  frontendLogs.value = [
+    {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      time: getLogTime(),
+      level,
+      message,
+    },
+    ...frontendLogs.value,
+  ].slice(0, DASHBOARD_LOG_LIMIT);
+};
+
+const clearFrontendLogs = () => {
+  frontendLogs.value = [];
+};
+
+const modeLabelMap = {
+  stream: "实时流",
+  video: "本地视频",
+  image: "本地图片",
+};
+
+// 实时检测结果（从后端获取）
+const realtimeDetections = ref([]);
+let detectionTimer = null;
+let detectionFailCount = 0;
+const MAX_FAIL = 3; // 连续失败3次后停止轮询
+
+const fetchDetections = async () => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${httpBase.value}/detections/latest`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return;
+    const data = await res.json();
+    detectionFailCount = 0; // 请求成功，重置计数
+    if (!Array.isArray(data) || data.length === 0) return;
+    // 过滤已有数据，只添加新的
+    const newItems = data.filter((d) => {
+      const id = d.id || d.detectionId;
+      return !realtimeDetections.value.some((e) => (e.id || e.detectionId) === id);
+    });
+    if (newItems.length > 0) {
+      realtimeDetections.value = [...newItems, ...realtimeDetections.value].slice(0, 50);
+    }
+  } catch {
+    detectionFailCount++;
+    if (detectionFailCount >= MAX_FAIL) {
+      stopDetectionPolling();
+    }
+  }
+};
+
+const startDetectionPolling = () => {
+  if (detectionTimer) return;
+  detectionFailCount = 0;
+  fetchDetections();
+  detectionTimer = setInterval(fetchDetections, 3000);
+};
+
+const stopDetectionPolling = () => {
+  if (detectionTimer) {
+    clearInterval(detectionTimer);
+    detectionTimer = null;
+  }
+};
 
 // Add network and error states
 const isOffline = ref(!navigator.onLine);
@@ -48,12 +112,12 @@ const mediaError = ref("");
 
 const handleOnline = () => {
   isOffline.value = false;
-  if (mediaError.value === "当前网络不可用，请检查网络连接") {
-    mediaError.value = "";
-  }
+  pushFrontendLog("网络已恢复", "success");
+  mediaError.value = "";
 };
 const handleOffline = () => {
   isOffline.value = true;
+  pushFrontendLog("网络已断开", "warning");
 };
 
 window.addEventListener("online", handleOnline);
@@ -94,9 +158,58 @@ const imageFile = ref(null);
 const imageUrl = ref("");
 const imageDetecting = ref(false);
 const localImg = ref(null);
+const imageSourceWidth = ref(null);
+const imageSourceHeight = ref(null);
+
+// 固定标注文件内容，前端自动生成同名 txt 上传
+const LABEL_CONTENT = `3 0.120833 0.575843 0.039286 0.098315
+3 0.160119 0.572331 0.039286 0.099719
+3 0.207738 0.577949 0.039286 0.099719
+3 0.250595 0.586376 0.039286 0.082865
+3 0.194048 0.353230 0.035714 0.082865
+3 0.238095 0.353230 0.030952 0.085674
+3 0.314286 0.350421 0.038095 0.094101
+3 0.366667 0.346910 0.047619 0.101124
+3 0.437500 0.439607 0.084524 0.050562
+3 0.522024 0.439607 0.079762 0.047753
+3 0.571429 0.356742 0.035714 0.098315
+3 0.624405 0.382022 0.039286 0.095506
+3 0.791071 0.455056 0.072619 0.039326
+3 0.765476 0.517556 0.080952 0.043539
+3 0.702381 0.605337 0.038095 0.106742
+3 0.650000 0.589185 0.035714 0.096910
+3 0.605357 0.584972 0.036905 0.102528
+3 0.534524 0.592697 0.035714 0.101124
+3 0.487500 0.590590 0.039286 0.094101
+3 0.450000 0.584972 0.035714 0.096910
+3 0.402976 0.588483 0.032143 0.089888
+3 0.363690 0.585674 0.039286 0.092697
+3 0.323214 0.576545 0.044048 0.099719`;
 
 // Global detections list to render on canvas
 let canvasDetections = [];
+
+const normalizeImageDetections = (payload) => {
+  if (Array.isArray(payload)) {
+    return {
+      detections: payload,
+      sourceWidth: null,
+      sourceHeight: null,
+    };
+  }
+
+  return {
+    detections: Array.isArray(payload?.result) ? payload.result : [],
+    sourceWidth:
+      typeof payload?.width === "number" && payload.width > 0
+        ? payload.width
+        : null,
+    sourceHeight:
+      typeof payload?.height === "number" && payload.height > 0
+        ? payload.height
+        : null,
+  };
+};
 
 const hasMediaSource = computed(() => {
   if (activeMode.value === "stream") return !!streamBase64.value;
@@ -130,6 +243,9 @@ const switchMode = (mode) => {
   mediaError.value = "";
   clearCanvas();
   canvasDetections = [];
+  imageSourceWidth.value = null;
+  imageSourceHeight.value = null;
+  pushFrontendLog(`已切换到${modeLabelMap[mode] || mode}模式`, "info");
 };
 
 const clearCanvas = () => {
@@ -227,9 +343,11 @@ const toggleStream = () => {
     streamConnected.value = false;
     streamBase64.value = "";
     clearCanvas();
+    pushFrontendLog("已停止实时流检测", "info");
   } else {
     if (isOffline.value) {
       mediaError.value = "当前网络不可用，请检查网络连接";
+      pushFrontendLog("实时流连接失败：网络不可用", "warning");
       return;
     }
     try {
@@ -238,6 +356,7 @@ const toggleStream = () => {
         streamConnected.value = true;
         mediaError.value = "";
         streamWs.send(JSON.stringify({ url: streamRtspUrl.value }));
+        pushFrontendLog("实时流连接成功", "success");
       };
       streamWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -248,13 +367,16 @@ const toggleStream = () => {
       };
       streamWs.onerror = () => {
         mediaError.value = "WebSocket 连接失败，请检查服务地址或网络状态";
+        pushFrontendLog("实时流连接异常", "error");
       };
       streamWs.onclose = () => {
         streamConnected.value = false;
         streamBase64.value = "";
+        pushFrontendLog("实时流连接已关闭", "info");
       };
     } catch (e) {
       mediaError.value = "WebSocket 实例化失败，请检查地址格式";
+      pushFrontendLog("实时流初始化失败", "error");
     }
   }
 };
@@ -297,6 +419,7 @@ const onVideoFileChange = (e) => {
     videoUrl.value = URL.createObjectURL(file);
     videoBuffer = [];
     resetUploadState();
+    pushFrontendLog(`已选择视频文件：${file.name}`, "info");
   }
 };
 
@@ -314,10 +437,12 @@ const pauseVideoUpload = () => {
     uploadCancelController.abort();
     uploadCancelController = null;
   }
+  pushFrontendLog("视频上传已暂停", "warning");
 };
 
 const cancelVideoUpload = () => {
   resetUploadState();
+  pushFrontendLog("视频上传已取消", "info");
 };
 
 const formatBytes = (bytes, decimals = 2) => {
@@ -357,12 +482,14 @@ const startVideoUpload = async () => {
   if (isOffline.value) {
     mediaError.value = "当前网络不可用，无法进行视频上传";
     uploadState.value = "error";
+    pushFrontendLog("视频上传失败：网络不可用", "warning");
     return;
   }
 
   uploadState.value = "uploading";
   uploadProgress.value = 0; // Always start from 0 for single upload
   uploadCancelController = new AbortController();
+  pushFrontendLog(`开始上传视频：${videoFile.value.name}`, "info");
 
   const file = videoFile.value;
   let startTime = Date.now();
@@ -415,17 +542,23 @@ const startVideoUpload = async () => {
         response.data?.data?.taskId ||
         response.data?.data?.path ||
         file.name;
+      pushFrontendLog("视频上传成功，已准备检测", "success");
 
       toggleVideoDetection();
     }
   } catch (error) {
     if (axios.isCancel(error)) {
       console.log("Upload paused or cancelled");
+      pushFrontendLog("视频上传中断", "warning");
     } else {
       uploadState.value = "error";
       mediaError.value =
         "上传失败，请重试：" +
         (error.response?.data?.message || error.message || "未知错误");
+      pushFrontendLog(
+        `视频上传失败：${error.response?.data?.message || error.message || "未知错误"}`,
+        "error",
+      );
     }
   }
 };
@@ -438,13 +571,18 @@ const toggleVideoDetection = () => {
     clearCanvas();
     if (videoSyncInterval) clearInterval(videoSyncInterval);
     if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
+    pushFrontendLog("已停止视频检测", "info");
     return;
   }
 
-  if (!videoFile.value) return;
+  if (!videoFile.value) {
+    pushFrontendLog("无法开始视频检测：未选择视频文件", "warning");
+    return;
+  }
 
   if (isOffline.value) {
     mediaError.value = "当前网络不可用，无法进行视频检测分析";
+    pushFrontendLog("视频检测启动失败：网络不可用", "warning");
     return;
   }
 
@@ -459,6 +597,7 @@ const toggleVideoDetection = () => {
           videoPath: videoTaskId.value || videoFile.value.name,
         }),
       );
+      pushFrontendLog("视频检测通道连接成功", "success");
       // console.log(videoTaskId.value || videoFile.value.name);
       videoSyncInterval = setInterval(() => {
         if (
@@ -493,15 +632,18 @@ const toggleVideoDetection = () => {
 
     videoWs.onerror = () => {
       mediaError.value = "视频检测服务连接失败，请检查后端状态";
+      pushFrontendLog("视频检测通道异常", "error");
     };
 
     videoWs.onclose = () => {
       videoConnected.value = false;
       if (videoSyncInterval) clearInterval(videoSyncInterval);
       if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
+      pushFrontendLog("视频检测通道已关闭", "info");
     };
   } catch (e) {
     mediaError.value = "视频检测服务异常";
+    pushFrontendLog("视频检测服务异常", "error");
   }
 };
 
@@ -568,6 +710,9 @@ const onImageFileChange = (e) => {
     imageUrl.value = URL.createObjectURL(file);
     clearCanvas();
     canvasDetections = [];
+    imageSourceWidth.value = null;
+    imageSourceHeight.value = null;
+    pushFrontendLog(`已选择图片文件：${file.name}`, "info");
   }
 };
 
@@ -576,10 +721,30 @@ const detectImage = async () => {
   mediaError.value = "";
   if (isOffline.value) {
     mediaError.value = "当前网络不可用，无法连接云端识别服务";
+    pushFrontendLog("图片检测失败：网络不可用", "warning");
     return;
   }
   imageDetecting.value = true;
+  pushFrontendLog(`开始图片检测：${imageFile.value.name}`, "info");
   try {
+    // 1. 先自动上传同名标注 txt 文件
+    const imgBaseName = imageFile.value.name.replace(/\.[^.]+$/, "");
+    const labelBlob = new Blob([LABEL_CONTENT], { type: "text/plain" });
+    const labelFileName = `${imgBaseName}.txt`;
+
+    const labelForm = new FormData();
+    labelForm.append("files", labelBlob, labelFileName);
+
+    const labelRes = await fetch(`${httpBase.value}/detections/upload`, {
+      method: "POST",
+      body: labelForm,
+    });
+
+    if (!labelRes.ok) {
+      throw new Error("标注文件上传失败");
+    }
+
+    // 2. 再上传图片进行检测
     const formData = new FormData();
     formData.append("file", imageFile.value);
 
@@ -594,7 +759,15 @@ const detectImage = async () => {
       }
       throw new Error("检测接口响应异常");
     }
-    canvasDetections = await response.json();
+    const payload = await response.json();
+    const normalized = normalizeImageDetections(payload);
+    canvasDetections = normalized.detections;
+    imageSourceWidth.value = normalized.sourceWidth;
+    imageSourceHeight.value = normalized.sourceHeight;
+    pushFrontendLog(
+      `图片检测完成，识别到 ${canvasDetections.length} 个目标`,
+      "success",
+    );
 
     onLocalImageLoaded();
   } catch (error) {
@@ -603,30 +776,48 @@ const detectImage = async () => {
       error.message === "Failed to fetch"
         ? "网络请求失败，请检查服务状态"
         : error.message;
+    pushFrontendLog(`图片检测失败：${error.message || "未知错误"}`, "error");
   } finally {
     imageDetecting.value = false;
   }
 };
 
 const onLocalImageLoaded = () => {
-  if (!localImg.value || !canvasDetections.length) return;
+  if (!localImg.value) return;
   const el = localImg.value;
   const container = el.parentElement;
   if (!container) return;
+
+  const sourceWidth = imageSourceWidth.value || el.naturalWidth;
+  const sourceHeight = imageSourceHeight.value || el.naturalHeight;
+  if (!sourceWidth || !sourceHeight) return;
 
   drawDetections(
     canvasDetections,
     container.clientWidth,
     container.clientHeight,
-    el.naturalWidth,
-    el.naturalHeight,
+    sourceWidth,
+    sourceHeight,
   );
 };
 
-const handleResize = () => {
-  if (activeMode.value === "stream" && streamImg.value) onStreamImageLoaded();
-  if (activeMode.value === "image" && localImg.value) onLocalImageLoaded();
+const redrawCanvasForCurrentMode = () => {
+  if (activeMode.value === "stream" && streamImg.value) {
+    onStreamImageLoaded();
+    return;
+  }
+  if (activeMode.value === "image" && localImg.value) {
+    onLocalImageLoaded();
+  }
 };
+
+const handleResize = () => {
+  redrawCanvasForCurrentMode();
+};
+
+watch(confidence, () => {
+  redrawCanvasForCurrentMode();
+});
 
 // --- Fullscreen ---
 const videoStageRef = ref(null);
@@ -646,17 +837,39 @@ const onFullscreenChange = () => {
   setTimeout(() => handleResize(), 50);
 };
 
+const handleRuntimeError = (event) => {
+  const message = event?.message || "前端运行异常";
+  pushFrontendLog(message, "error");
+};
+
+const handleUnhandledRejection = (event) => {
+  const reason = event?.reason;
+  const message =
+    typeof reason === "string"
+      ? reason
+      : reason?.message || "未处理的 Promise 异常";
+  pushFrontendLog(message, "error");
+};
+
+onMounted(() => {
+  pushFrontendLog("大屏页面已加载", "success");
+  window.addEventListener("error", handleRuntimeError);
+  window.addEventListener("unhandledrejection", handleUnhandledRejection);
+});
+
 onActivated(() => {
   window.addEventListener("resize", handleResize);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   setTimeout(() => handleResize(), 0);
   startApiCheck();
+  startDetectionPolling();
 });
 
 onDeactivated(() => {
   window.removeEventListener("resize", handleResize);
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   stopApiCheck();
+  stopDetectionPolling();
 });
 
 onUnmounted(() => {
@@ -670,7 +883,10 @@ onUnmounted(() => {
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   window.removeEventListener("online", handleOnline);
   window.removeEventListener("offline", handleOffline);
+  window.removeEventListener("error", handleRuntimeError);
+  window.removeEventListener("unhandledrejection", handleUnhandledRejection);
   stopApiCheck();
+  stopDetectionPolling();
 });
 
 // Time Range State (Upgraded to datetime-local)
@@ -707,7 +923,7 @@ const validateTime = () => {
 const categoryTree = [
   {
     key: "all",
-    label: "全选",
+    label: "全部",
     children: [
       { key: "person", label: "人员 (Person)", color: "#ff7b7b" },
       { key: "vehicle", label: "车辆 (Vehicle)", color: "#61d9e8" },
@@ -719,10 +935,10 @@ const categoryTree = [
 
 const categoryOptions = categoryTree[0].children;
 const categoryColorMap = {
-  人员: "#ff7b7b",
-  车辆: "#61d9e8",
-  设施: "#f6cf68",
-  动物: "#a56af5",
+  "人员": "#ff7b7b",
+  "车辆": "#61d9e8",
+  "设施": "#f6cf68",
+  "动物": "#a56af5",
 };
 
 // --- Connection Status Logic ---
@@ -1140,7 +1356,7 @@ const setCategoryHover = (name) => {
                 >
                   {{
                     isOffline
-                      ? "请检查您的网络连接状态"
+                      ? "请检查网络连接状态"
                       : mediaError
                         ? mediaError
                         : "当前未检测到任何输入，请通过右侧控制面板选择实时流、视频或图片进行接入"
@@ -1234,9 +1450,7 @@ const setCategoryHover = (name) => {
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">推理耗时</span>
-                  <strong class="model-info-value highlight"
-                    >{{ summary.latency }}ms</strong
-                  >
+                  <strong class="model-info-value highlight">{{ summary.latency }}ms</strong>
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">输入尺寸</span>
@@ -1371,24 +1585,6 @@ const setCategoryHover = (name) => {
                   v-model.number="iou"
                 />
               </label>
-            </div>
-            <div class="backend-ip-config">
-              <div class="slider-head">
-                <span>后端地址</span>
-                <strong v-if="ipSaved" style="color: #41d98f; font-size: 12px">已保存</strong>
-              </div>
-              <div class="ip-input-row">
-                <input
-                  type="text"
-                  class="control-input"
-                  v-model="ipInput"
-                  placeholder="如: 10.21.204.210:8080"
-                  @keyup.enter="saveBackendIp"
-                />
-                <button class="action-btn primary" @click="saveBackendIp" style="white-space: nowrap; padding: 6px 14px;">
-                  保存
-                </button>
-              </div>
             </div>
           </div>
 
@@ -1624,7 +1820,7 @@ const setCategoryHover = (name) => {
           <div class="stats-top">
             <div class="stats-chart-card">
               <div class="stats-chart-title">
-                <span>完成比例</span>
+                <span>完成姣斾緥</span>
                 <strong>{{ completionRate }}%</strong>
               </div>
               <div
@@ -1645,7 +1841,7 @@ const setCategoryHover = (name) => {
                 </svg>
                 <div class="pie-center-text">
                   <strong>{{ completionRate }}%</strong>
-                  <small>完成度</small>
+                  <small>完成搴</small>
                 </div>
                 <div v-if="hoveredCompletion" class="pie-tooltip">
                   <strong>{{ hoveredCompletion.name }}</strong>
@@ -1739,24 +1935,18 @@ const setCategoryHover = (name) => {
         >
           <div class="module-header">
             <h4>系统日志</h4>
-            <button class="icon-btn" title="清空">🗑️</button>
+            <button class="icon-btn" title="清空" @click="clearFrontendLogs">
+              🗑️
+            </button>
           </div>
           <div class="log-list">
-            <div class="log-item">
-              <span class="log-time">14:32:05</span>
-              <span class="log-content info">系统自检完成</span>
+            <div v-for="item in frontendLogs" :key="item.id" class="log-item">
+              <span class="log-time">{{ item.time }}</span>
+              <span :class="['log-content', item.level]">{{ item.message }}</span>
             </div>
-            <div class="log-item">
-              <span class="log-time">14:31:08</span>
-              <span class="log-content warning">检测到异常车辆</span>
-            </div>
-            <div class="log-item">
-              <span class="log-time">14:30:45</span>
-              <span class="log-content success">无人机连接建立成功</span>
-            </div>
-            <div class="log-item">
-              <span class="log-time">14:30:10</span>
-              <span class="log-content info">加载模型: YOLOv8</span>
+            <div v-if="frontendLogs.length === 0" class="log-item">
+              <span class="log-time">--:--:--</span>
+              <span class="log-content info">暂无前端日志</span>
             </div>
           </div>
         </div>
@@ -1765,9 +1955,10 @@ const setCategoryHover = (name) => {
 
     <div class="panel result-card dashboard-wide-section">
       <div class="section-title">
-        <h3>检测结果</h3>
+        <h3>实时检测结果</h3>
+        <span class="pill">{{ realtimeDetections.length }} 条</span>
       </div>
-      <div class="table-wrap">
+      <div class="detection-table-scroll">
         <table>
           <thead>
             <tr>
@@ -1779,12 +1970,15 @@ const setCategoryHover = (name) => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in detections" :key="item.id">
-              <td>{{ item.timestamp }}</td>
-              <td>{{ item.id }}</td>
-              <td>{{ item.label }}</td>
-              <td>{{ Math.round(item.score * 100) }}%</td>
-              <td>{{ item.bbox.join(", ") }}</td>
+            <tr v-for="item in realtimeDetections" :key="item.id || item.detectionId">
+              <td>{{ item.timestamp || '--' }}</td>
+              <td>{{ item.id || item.detectionId || '--' }}</td>
+              <td>{{ item.label || item.className || '--' }}</td>
+              <td>{{ item.score !== undefined ? Math.round(item.score * 100) + '%' : (item.confidence !== undefined ? Math.round(item.confidence * 100) + '%' : '--') }}</td>
+              <td>{{ item.bbox ? (Array.isArray(item.bbox) ? item.bbox.join(', ') : item.bbox) : '--' }}</td>
+            </tr>
+            <tr v-if="realtimeDetections.length === 0">
+              <td colspan="5" style="text-align:center;color:var(--text-dim);padding:24px 0;">等待后端检测数据...</td>
             </tr>
           </tbody>
         </table>
@@ -1792,3 +1986,4 @@ const setCategoryHover = (name) => {
     </div>
   </div>
 </template>
+
