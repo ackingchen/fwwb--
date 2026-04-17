@@ -18,10 +18,21 @@ export const useConfigStore = defineStore('config', () => {
   const confidence = ref(0.62);
   const iou = ref(0.48);
   const selectedModel = ref('YOLOv11-lite');
-  const enabledLabels = ref(['person', 'vehicle', 'animal', 'facility']);
+  const enabledLabels = ref([
+    'pedestrian',
+    'people',
+    'bicycle',
+    'car',
+    'van',
+    'truck',
+    'tricycle',
+    'awning-tricycle',
+    'bus',
+    'motor',
+  ]);
   
-  // Mock active task selection
-  const selectedTaskId = ref('task-001');
+  // Active task selection
+  const selectedTaskId = ref('');
 
   // System Preferences
   const language = ref('zh-CN');
@@ -39,7 +50,18 @@ export const useConfigStore = defineStore('config', () => {
     confidence.value = 0.62;
     iou.value = 0.48;
     selectedModel.value = 'YOLOv11-lite';
-    enabledLabels.value = ['person', 'vehicle', 'animal', 'facility'];
+    enabledLabels.value = [
+      'pedestrian',
+      'people',
+      'bicycle',
+      'car',
+      'van',
+      'truck',
+      'tricycle',
+      'awning-tricycle',
+      'bus',
+      'motor',
+    ];
     language.value = 'zh-CN';
     theme.value = 'dark';
     autoUpdate.value = true;

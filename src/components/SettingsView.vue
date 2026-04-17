@@ -2,11 +2,6 @@
 import { useConfigStore } from "../stores/useConfigStore";
 import { storeToRefs } from "pinia";
 import { ref, watch, onActivated, onDeactivated, onUnmounted } from "vue";
-import {
-  loginHistory as mockLoginHistory,
-  deviceList as mockDeviceList,
-  systemLogs as mockSystemLogs,
-} from "../mock/data";
 
 const configStore = useConfigStore();
 const {
@@ -32,13 +27,13 @@ const saveBackendIp = () => {
   setTimeout(() => { ipSaved.value = false; }, 1500);
 };
 
-// Mock System Info
+// 系统信息（未接后端前使用占位）
 const systemInfo = {
-  version: "2.4.0-beta",
-  build: "20260310-RC1",
-  os: "Ubuntu 24.04 LTS",
-  kernel: "6.8.0-generic",
-  uptime: "3d 14h 22m",
+  version: "--",
+  build: "--",
+  os: "--",
+  kernel: "--",
+  uptime: "--",
 };
 
 // UI State
@@ -47,9 +42,9 @@ const isSaving = ref(false);
 const showSaveSuccess = ref(false);
 const showSaveError = ref(false);
 
-const loginHistory = ref([...mockLoginHistory]);
-const deviceList = ref([...mockDeviceList]);
-const systemLogs = ref([...mockSystemLogs]);
+const loginHistory = ref([]);
+const deviceList = ref([]);
+const systemLogs = ref([]);
 
 const LOG_POLL_INTERVAL = 5000;
 const LOG_PAGE_SIZE = 50;
@@ -199,17 +194,23 @@ const stopLogPolling = () => {
 };
 
 const tabs = [
-  { key: "detection", label: "模型与检测", icon: "🎯" },
-  { key: "preferences", label: "系统偏好", icon: "⚙️" },
-  { key: "security", label: "安全与隐私", icon: "🔒" },
-  { key: "advanced", label: "高级选项", icon: "🛠️" },
+  { key: "detection", label: "模型与检测", icon: "模" },
+  { key: "preferences", label: "系统偏好", icon: "偏" },
+  { key: "security", label: "安全与隐私", icon: "安" },
+  { key: "advanced", label: "高级选项", icon: "高" },
 ];
 
 const detectionOptions = [
-  { key: "person", label: "人员" },
-  { key: "vehicle", label: "车辆" },
-  { key: "animal", label: "动物" },
-  { key: "facility", label: "设施" },
+  { key: "pedestrian", label: "行人 (Pedestrian)" },
+  { key: "people", label: "人群 (People)" },
+  { key: "bicycle", label: "自行车 (Bicycle)" },
+  { key: "car", label: "汽车 (Car)" },
+  { key: "van", label: "面包车 (Van)" },
+  { key: "truck", label: "卡车 (Truck)" },
+  { key: "tricycle", label: "三轮车 (Tricycle)" },
+  { key: "awning-tricycle", label: "棚式三轮车 (Awning-tricycle)" },
+  { key: "bus", label: "公交车 (Bus)" },
+  { key: "motor", label: "摩托车 (Motor)" },
 ];
 
 // Helper Functions
@@ -527,6 +528,9 @@ onUnmounted(() => {
                     </span>
                   </td>
                 </tr>
+                <tr v-if="loginHistory.length === 0">
+                  <td colspan="4" class="sys-log-empty">--</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -551,6 +555,7 @@ onUnmounted(() => {
                   下线
                 </button>
               </div>
+              <div v-if="deviceList.length === 0" class="sys-log-empty">--</div>
             </div>
           </div>
 
@@ -621,7 +626,7 @@ onUnmounted(() => {
               <span class="log-msg">{{ log.message }}</span>
             </div>
             <div v-if="!logsLoading && !logsError && systemLogs.length === 0" class="sys-log-empty">
-              暂无日志
+              --
             </div>
           </div>
         </div>

@@ -30,6 +30,10 @@ const getSystemContext = () => {
   const det = detections.value;
   const res = resources.value;
   const sum = summary.value;
+  const numText = (value, suffix = "") => {
+    const num = Number(value);
+    return Number.isFinite(num) ? `${num}${suffix}` : "--";
+  };
 
   return `你是无人机目标检测系统的 AI 助手，名叫"检测助手"。你需要根据系统当前状态回答用户的问题，提供专业、简洁的回答。
 
@@ -39,16 +43,16 @@ const getSystemContext = () => {
 - IoU 阈值: ${iou.value.toFixed(2)}
 - 当前检测目标数: ${det.length}
 - 检测目标详情: ${det.map((d) => `${d.label}(${Math.round(d.score * 100)}%)`).join("、") || "暂无"}
-- FPS: ${sum.fps}
-- 推理延迟: ${sum.latency}ms
-- Precision: ${sum.precision}%
-- Recall: ${sum.recall}%
-- mAP@0.5: ${sum.map50}%
-- F1 Score: ${sum.f1}%
-- CPU 使用率: ${res.cpu}%
-- GPU 使用率: ${res.gpu}%
-- 内存使用率: ${res.memory}%
-- GPU 温度: ${res.temp}°C
+- FPS: ${numText(sum.fps)}
+- 推理延迟: ${numText(sum.latency, "ms")}
+- Precision: ${numText(sum.precision, "%")}
+- Recall: ${numText(sum.recall, "%")}
+- mAP@0.5: ${numText(sum.map50, "%")}
+- F1 Score: ${numText(sum.f1, "%")}
+- CPU 使用率: ${numText(res.cpu, "%")}
+- GPU 使用率: ${numText(res.gpu, "%")}
+- 内存使用率: ${numText(res.memory, "%")}
+- GPU 温度: ${numText(res.temp, "°C")}
 
 请用中文回答，保持简洁专业。如果用户问的问题与系统无关，也可以正常回答。`;
 };

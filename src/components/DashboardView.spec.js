@@ -136,7 +136,7 @@ describe("DashboardView", () => {
 
     // 模拟 localImg 元素的 clientWidth, clientHeight 以及 naturalWidth, naturalHeight
     // 情景 1：容器比图片宽 (图片高撑满容器，左右留白)
-    // 容器: 800x600, 图片: 400x400
+    // 容器: 800x600, ͼƬ: 400x400
     // => 图片渲染大小应为 600x600, 偏移量 offsetX: (800-600)/2 = 100, offsetY: 0
     // => scale: 600/400 = 1.5
     // => bbox [100, 100, 200, 200]
@@ -174,7 +174,7 @@ describe("DashboardView", () => {
     mockStrokeRect.mockClear();
 
     // 情景 2：容器比图片窄 (图片宽撑满容器，上下留白)
-    // 容器: 400x800, 图片: 400x200
+    // 容器: 400x800, ͼƬ: 400x200
     // => 图片渲染大小应为 400x200, 偏移量 offsetX: 0, offsetY: (800-200)/2 = 300
     // => scale: 400/400 = 1.0
     // => bbox [100, 100, 200, 200]

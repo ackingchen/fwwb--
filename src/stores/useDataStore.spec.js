@@ -33,6 +33,10 @@ describe('Data Store', () => {
     const dataStore = useDataStore();
     dataStore.tasks = [];
     
-    expect(dataStore.activeTask).toEqual({});
+    expect(dataStore.activeTask).toEqual({
+      name: '--',
+      scene: '--',
+      source: '--',
+    });
   });
 });

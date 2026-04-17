@@ -1,5 +1,12 @@
 <script setup>
-import { computed, ref, watch, onMounted, onUnmounted, onErrorCaptured } from "vue";
+import {
+  computed,
+  ref,
+  watch,
+  onMounted,
+  onUnmounted,
+  onErrorCaptured,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDataStore } from "./stores/useDataStore";
 import { useConfigStore } from "./stores/useConfigStore";
@@ -24,7 +31,7 @@ function applyTheme(val) {
 watch(theme, applyTheme, { immediate: true });
 
 const headerRef = ref(null);
-const contentPaddingTop = ref("112px"); // Default fallback
+const contentPaddingTop = ref("112px");
 
 const tabs = [
   { key: "dashboard", label: "大屏", icon: "screen", path: "/dashboard" },
@@ -42,14 +49,11 @@ function navigate(key) {
 let resizeObserver = null;
 
 function updatePadding() {
-  if (headerRef.value) {
-    // Get exact header height + 24px buffer
-    const height = headerRef.value.offsetHeight;
-    contentPaddingTop.value = `${height + 24}px`;
-  }
+  if (!headerRef.value) return;
+  const height = headerRef.value.offsetHeight;
+  contentPaddingTop.value = `${height + 24}px`;
 }
 
-// Error Boundary & Loading State
 const hasError = ref(false);
 const errorMessage = ref("");
 const isNavigating = ref(false);
@@ -68,7 +72,7 @@ onErrorCaptured((err, instance, info) => {
   console.error("Module rendering error:", err, info);
   hasError.value = true;
   errorMessage.value = err.message || "模块渲染异常，请刷新重试";
-  return false; // stop propagation
+  return false;
 });
 
 onMounted(() => {
@@ -120,14 +124,18 @@ onUnmounted(() => {
       </nav>
 
       <div class="header-right">
-        <button class="theme-toggle" @click="toggleTheme" :title="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'">
+        <button
+          class="theme-toggle"
+          @click="toggleTheme"
+          :title="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
+        >
           <span v-if="theme === 'dark'">&#9790;</span>
           <span v-else>&#9728;</span>
         </button>
         <div class="topbar-status">
           <span class="status-dot"></span>
           <span>系统状态: 运行中</span>
-          <strong>| 帧率: {{ summary.fps }} FPS</strong>
+          <strong>| 帧率: {{ summary.fps ?? '--' }} FPS</strong>
         </div>
       </div>
     </header>

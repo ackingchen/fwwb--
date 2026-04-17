@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { useConfigStore } from "../stores/useConfigStore";
 import { useDataStore } from "../stores/useDataStore";
 import { storeToRefs } from "pinia";
@@ -16,7 +16,7 @@ import axios from "axios";
 const configStore = useConfigStore();
 const dataStore = useDataStore();
 
-const { confidence, iou, selectedModel, enabledLabels, backendIp, httpBase, wsBase } =
+const { confidence, iou, selectedModel, enabledLabels, backendIp, httpBase, wsBase, selectedTaskId } =
   storeToRefs(configStore);
 const {
   filteredDetections: detections,
@@ -24,9 +24,10 @@ const {
   activeTask: task,
   series,
   resources,
+  tasks: taskRecords,
 } = storeToRefs(dataStore);
 
-// Mock state for new controls
+// UI state for system controls
 const systemStatus = ref("running"); // running, stopped
 
 // Frontend runtime logs for dashboard log module
@@ -52,17 +53,429 @@ const clearFrontendLogs = () => {
   frontendLogs.value = [];
 };
 
+// Quick create task dialog (same behavior as Tasks page new-task action)
+const DASHBOARD_TASK_SUMMARY_KEY = "dashboard_task_summary";
+const latestTaskSummary = ref({
+  taskName: "",
+  taskType: "",
+  scene: "",
+});
+
+const quickTaskDialogVisible = ref(false);
+const quickTaskName = ref("");
+const quickTaskScene = ref("");
+const quickTaskSource = ref("");
+const quickTaskSceneOptions = ["城市", "山地", "农田", "水域", "森林", "隧道", "港口", "高速公路"];
+const quickTaskSourceOptions = ["图片", "视频", "实时流"];
+const QUICK_SOURCE_TO_TASK_TYPE = {
+  图片: 0,
+  视频: 1,
+  实时流: 2,
+};
+const QUICK_TASK_TYPE_LABELS = {
+  0: "图片",
+  1: "视频",
+  2: "实时流",
+};
+
+const normalizeTaskTypeLabel = (value) => {
+  const num = Number(value);
+  if (Number.isFinite(num) && QUICK_TASK_TYPE_LABELS[num]) {
+    return QUICK_TASK_TYPE_LABELS[num];
+  }
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (["图片", "image", "img"].includes(raw.toLowerCase())) return "图片";
+  if (["视频", "video"].includes(raw.toLowerCase())) return "视频";
+  if (["实时流", "stream", "live", "rtsp"].includes(raw.toLowerCase())) return "实时流";
+  return raw;
+};
+
+const applyTaskSummary = (payload = {}) => {
+  latestTaskSummary.value = {
+    taskName: String(payload.taskName ?? "").trim(),
+    taskType: normalizeTaskTypeLabel(payload.taskType),
+    scene: String(payload.scene ?? "").trim(),
+  };
+};
+
+const saveTaskSummaryToStorage = (payload = {}) => {
+  applyTaskSummary(payload);
+  try {
+    localStorage.setItem(DASHBOARD_TASK_SUMMARY_KEY, JSON.stringify(latestTaskSummary.value));
+  } catch {
+    // Ignore storage write failures
+  }
+};
+
+const loadTaskSummaryFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_TASK_SUMMARY_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    applyTaskSummary(parsed);
+  } catch {
+    // Ignore storage parse failures
+  }
+};
+
+const dashboardTaskSummary = computed(() => {
+  const fallbackType = normalizeTaskTypeLabel(task.value?.taskType ?? task.value?.taskTypeLabel);
+  return {
+    taskName: latestTaskSummary.value.taskName || String(task.value?.name ?? "").trim(),
+    taskType: latestTaskSummary.value.taskType || fallbackType,
+    scene: latestTaskSummary.value.scene || String(task.value?.scene ?? "").trim(),
+  };
+});
+
+const getStoredTaskSummaryForUpload = () => {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_TASK_SUMMARY_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return {
+          taskName: String(parsed.taskName ?? "").trim(),
+          scene: String(parsed.scene ?? "").trim(),
+        };
+      }
+    }
+  } catch {
+    // Ignore storage read failures
+  }
+
+  return {
+    taskName: String(latestTaskSummary.value.taskName ?? "").trim(),
+    scene: String(latestTaskSummary.value.scene ?? "").trim(),
+  };
+};
+
+const generateQuickTaskId = () => {
+  const now = new Date();
+  const y = String(now.getFullYear()).slice(2);
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const seq = String(taskRecords.value.length + 1).padStart(2, "0");
+  return `T-${y}${m}${d}-${seq}`;
+};
+
+const formatQuickTaskNow = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const M = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  return `${y}-${M}-${d} ${h}:${m}`;
+};
+
+const openQuickCreateTaskDialog = () => {
+  quickTaskName.value = "";
+  quickTaskScene.value = "";
+  quickTaskSource.value = "";
+  quickTaskDialogVisible.value = true;
+};
+
+const closeQuickCreateTaskDialog = () => {
+  quickTaskDialogVisible.value = false;
+};
+
+const confirmQuickCreateTask = () => {
+  if (!quickTaskName.value.trim() || !quickTaskScene.value || !quickTaskSource.value.trim()) return;
+  const taskType = QUICK_SOURCE_TO_TASK_TYPE[quickTaskSource.value];
+  const taskTypeLabel = QUICK_TASK_TYPE_LABELS[taskType] ?? "--";
+  const createdTaskId = generateQuickTaskId();
+  const newTask = {
+    id: createdTaskId,
+    taskId: createdTaskId,
+    name: quickTaskName.value.trim(),
+    taskType,
+    taskTypeLabel,
+    scene: quickTaskScene.value,
+    source: quickTaskSource.value.trim(),
+    createdAt: formatQuickTaskNow(),
+    targetCount: 0,
+    status: "pending",
+  };
+  taskRecords.value.unshift(newTask);
+  selectedTaskId.value = createdTaskId;
+  quickTaskDialogVisible.value = false;
+  saveTaskSummaryToStorage({
+    taskName: newTask.name,
+    taskType: taskTypeLabel,
+    scene: newTask.scene,
+  });
+  pushFrontendLog(`已创建任务 ${newTask.name}`, "success");
+};
+
 const modeLabelMap = {
   stream: "实时流",
   video: "本地视频",
   image: "本地图片",
 };
+const screenshotInProgress = ref(false);
+
+const DETECTION_CATEGORY_OPTIONS = [
+  { key: "pedestrian", label: "行人 (Pedestrian)", color: "#ff7b7b" },
+  { key: "people", label: "人群 (People)", color: "#ff9f6e" },
+  { key: "bicycle", label: "自行车 (Bicycle)", color: "#61d9e8" },
+  { key: "car", label: "汽车 (Car)", color: "#4f95ff" },
+  { key: "van", label: "面包车 (Van)", color: "#5fd1aa" },
+  { key: "truck", label: "卡车 (Truck)", color: "#f6cf68" },
+  { key: "tricycle", label: "三轮车 (Tricycle)", color: "#ffd166" },
+  {
+    key: "awning-tricycle",
+    label: "棚式三轮车 (Awning-tricycle)",
+    color: "#a56af5",
+  },
+  { key: "bus", label: "公交车 (Bus)", color: "#7b8cff" },
+  { key: "motor", label: "摩托车 (Motor)", color: "#8bd450" },
+];
+
+const CATEGORY_LABEL_ALIAS_MAP = {
+  pedestrian: ["pedestrian", "person", "行人"],
+  people: ["people", "crowd", "人群"],
+  bicycle: ["bicycle", "bike", "自行车"],
+  car: ["car", "vehicle", "汽车", "轿车"],
+  van: ["van", "面包车", "厢式车"],
+  truck: ["truck", "卡车", "货车"],
+  tricycle: ["tricycle", "三轮车"],
+  "awning-tricycle": ["awning-tricycle", "awning tricycle", "棚式三轮车", "篷式三轮车"],
+  bus: ["bus", "公交车", "客车"],
+  motor: ["motor", "motorcycle", "摩托车", "电动车"],
+};
+
+const CATEGORY_KEY_BY_CLASS_ID = {
+  0: "pedestrian",
+  1: "people",
+  2: "bicycle",
+  3: "car",
+  4: "van",
+  5: "truck",
+  6: "tricycle",
+  7: "awning-tricycle",
+  8: "bus",
+  9: "motor",
+};
+
+const CATEGORY_OPTION_MAP = DETECTION_CATEGORY_OPTIONS.reduce((acc, item) => {
+  acc[item.key] = item;
+  return acc;
+}, {});
+
+const normalizeLabelToken = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\(.*?\)/g, "")
+    .replace(/[_\s]+/g, "-");
+
+const resolveCategoryKeyByText = (value) => {
+  const token = normalizeLabelToken(value);
+  if (!token) return null;
+  if (CATEGORY_OPTION_MAP[token]) return token;
+  const entry = Object.entries(CATEGORY_LABEL_ALIAS_MAP).find(([, aliases]) =>
+    aliases.some((alias) => normalizeLabelToken(alias) === token),
+  );
+  return entry ? entry[0] : null;
+};
+
+const resolveDetectionLabelKey = (item = {}) => {
+  const directKey =
+    item?.labelKey ??
+    item?.label_key ??
+    item?.type ??
+    item?.targetType;
+  const directResolved = resolveCategoryKeyByText(directKey);
+  if (directResolved) return directResolved;
+
+  const textResolved = resolveCategoryKeyByText(
+    item?.label ??
+      item?.className ??
+      item?.class_name ??
+      item?.category ??
+      item?.name,
+  );
+  if (textResolved) return textResolved;
+
+  const classId = Number(
+    item?.classId ??
+      item?.class_id ??
+      item?.cls ??
+      item?.labelId,
+  );
+  if (Number.isFinite(classId) && CATEGORY_KEY_BY_CLASS_ID[classId]) {
+    return CATEGORY_KEY_BY_CLASS_ID[classId];
+  }
+
+  return null;
+};
+
+const getCategoryDisplayLabelByKey = (key) =>
+  CATEGORY_OPTION_MAP[key]?.label ?? key;
+
+const isDetectionCategoryEnabled = (item = {}) => {
+  const key = resolveDetectionLabelKey(item);
+  if (!key) return true;
+  return enabledLabels.value.includes(key);
+};
+
+const toNumberOrUndefined = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+};
+
+const displayText = (value) => {
+  if (value === null || value === undefined) return "--";
+  const text = String(value).trim();
+  return text ? text : "--";
+};
+
+const displayValue = (value, suffix = "") => {
+  const num = toNumberOrUndefined(value);
+  return num === undefined ? "--" : `${num}${suffix}`;
+};
+
+const displayPercent = (value) => {
+  const num = toNumberOrUndefined(value);
+  return num === undefined ? "--" : `${num}%`;
+};
+
+const barWidth = (value) => {
+  const num = toNumberOrUndefined(value);
+  const clamped = Math.max(0, Math.min(100, num ?? 0));
+  return `${clamped}%`;
+};
+
+const normalizeDetectionTimestamp = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return getLogTime();
+  if (/^\d{2}:\d{2}:\d{2}$/.test(raw)) return raw;
+  return raw.replace("T", " ").replace("Z", "");
+};
+
+const normalizeConfidenceRatio = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return undefined;
+  if (num <= 1) return Math.max(0, Math.min(1, num));
+  if (num <= 100) return num / 100;
+  return 1;
+};
+
+const normalizeDetectionBbox = (value) => {
+  if (Array.isArray(value)) {
+    const list = value.map((item) => Number(item)).filter((item) => Number.isFinite(item));
+    return list.length ? list : undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+
+  const candidates = [
+    [value.x1, value.y1, value.x2, value.y2],
+    [value.left, value.top, value.right, value.bottom],
+    [value.x, value.y, value.width, value.height],
+  ];
+
+  for (const group of candidates) {
+    const list = group.map((item) => Number(item));
+    if (list.every((item) => Number.isFinite(item))) {
+      return list;
+    }
+  }
+  return undefined;
+};
+
+const normalizeDetectionLabel = (item, index) => {
+  const resolvedKey = resolveDetectionLabelKey(item);
+  const textCandidate =
+    item?.label ??
+    item?.className ??
+    item?.class_name ??
+    item?.category ??
+    item?.name ??
+    item?.labelKey;
+  if (textCandidate !== undefined && textCandidate !== null && String(textCandidate).trim()) {
+    return String(textCandidate).trim();
+  }
+
+  if (resolvedKey) {
+    return getCategoryDisplayLabelByKey(resolvedKey);
+  }
+
+  const classId = item?.classId ?? item?.class_id ?? item?.cls ?? item?.labelId;
+  if (classId !== undefined && classId !== null && String(classId).trim()) {
+    return `类别 ${String(classId).trim()}`;
+  }
+
+  return `目标${index + 1}`;
+};
+
+const normalizeRealtimeDetectionRows = (
+  list,
+  { idPrefix = "DET", timestampFallback = getLogTime() } = {},
+) => {
+  if (!Array.isArray(list)) return [];
+  const nowSeed = Date.now();
+  return list.map((item, index) => {
+    const detectionIdRaw =
+      item?.id ??
+      item?.detectionId ??
+      item?.targetId ??
+      item?.trackId ??
+      `${idPrefix}-${nowSeed}-${index + 1}`;
+    const detectionId = String(detectionIdRaw).trim() || `${idPrefix}-${nowSeed}-${index + 1}`;
+    const scoreRatio = normalizeConfidenceRatio(
+      item?.score ?? item?.confidence ?? item?.probability ?? item?.conf,
+    );
+    const bbox = normalizeDetectionBbox(
+      item?.bbox ?? item?.box ?? item?.xyxy ?? item?.rect ?? item?.coordinates,
+    );
+    const labelKey = resolveDetectionLabelKey(item);
+    const label = normalizeDetectionLabel(item, index);
+    const timestamp = normalizeDetectionTimestamp(
+      item?.timestamp ??
+      item?.time ??
+      item?.createTime ??
+      item?.createdAt ??
+      item?.taskTime ??
+      timestampFallback,
+    );
+
+    return {
+      ...item,
+      id: detectionId,
+      detectionId,
+      timestamp,
+      labelKey: labelKey ?? item?.labelKey ?? item?.label_key,
+      label,
+      className: item?.className ?? label,
+      score: scoreRatio,
+      confidence: scoreRatio,
+      bbox: bbox ?? item?.bbox,
+    };
+  });
+};
+
+const formatDetectionConfidence = (item) => {
+  const ratio = normalizeConfidenceRatio(item?.score ?? item?.confidence);
+  return ratio === undefined ? "--" : `${Math.round(ratio * 100)}%`;
+};
+
+const formatDetectionBbox = (item) => {
+  const bbox = normalizeDetectionBbox(item?.bbox ?? item?.box ?? item?.xyxy ?? item?.rect ?? item?.coordinates);
+  if (!bbox) return "--";
+  return bbox.map((value) => Number(value).toFixed(1).replace(/\.0$/, "")).join(", ");
+};
 
 // 实时检测结果（从后端获取）
 const realtimeDetections = ref([]);
+const filteredRealtimeDetections = computed(() =>
+  realtimeDetections.value.filter((item) => isDetectionCategoryEnabled(item)),
+);
 let detectionTimer = null;
 let detectionFailCount = 0;
 const MAX_FAIL = 3; // 连续失败3次后停止轮询
+const detectionLoaded = ref(false);
 
 const fetchDetections = async () => {
   try {
@@ -74,10 +487,18 @@ const fetchDetections = async () => {
     clearTimeout(timeout);
     if (!res.ok) return;
     const data = await res.json();
+    if (Array.isArray(data)) {
+      detectionLoaded.value = true;
+    }
     detectionFailCount = 0; // 请求成功，重置计数
     if (!Array.isArray(data) || data.length === 0) return;
+    const normalizedRows = normalizeRealtimeDetectionRows(data, {
+      idPrefix: "LIVE",
+      timestampFallback: getLogTime(),
+    });
+    if (!normalizedRows.length) return;
     // 过滤已有数据，只添加新的
-    const newItems = data.filter((d) => {
+    const newItems = normalizedRows.filter((d) => {
       const id = d.id || d.detectionId;
       return !realtimeDetections.value.some((e) => (e.id || e.detectionId) === id);
     });
@@ -103,6 +524,76 @@ const stopDetectionPolling = () => {
   if (detectionTimer) {
     clearInterval(detectionTimer);
     detectionTimer = null;
+  }
+};
+
+// 系统资源状态（从后端实时获取）
+let resourceTimer = null;
+const RESOURCE_POLL_INTERVAL = 3000;
+
+const clampPercent = (value, fallback) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(num)));
+};
+
+const normalizeTemperature = (value, fallback) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(-50, Math.min(150, Math.round(num)));
+};
+
+const normalizeResourcePayload = (payload) => {
+  const source =
+    payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
+      ? payload.data
+      : payload;
+
+  return {
+    cpu: clampPercent(source?.cpu, resources.value.cpu),
+    gpu: clampPercent(source?.gpu, resources.value.gpu),
+    memory: clampPercent(source?.memory, resources.value.memory),
+    temp: normalizeTemperature(
+      source?.temperature ?? source?.temp,
+      resources.value.temp,
+    ),
+  };
+};
+
+const fetchSystemResources = async () => {
+  if (isOffline.value) return;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${httpBase.value}/system/resources`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return;
+
+    const payload = await res.json();
+    const code = payload?.code;
+    if (code !== undefined && code !== 0 && code !== 200) return;
+
+    resources.value = {
+      ...resources.value,
+      ...normalizeResourcePayload(payload),
+    };
+  } catch {
+    // 静默失败，保留最近一次有效数据，等待下一轮轮询
+  }
+};
+
+const startResourcePolling = () => {
+  if (resourceTimer) return;
+  fetchSystemResources();
+  resourceTimer = setInterval(fetchSystemResources, RESOURCE_POLL_INTERVAL);
+};
+
+const stopResourcePolling = () => {
+  if (resourceTimer) {
+    clearInterval(resourceTimer);
+    resourceTimer = null;
   }
 };
 
@@ -218,6 +709,11 @@ const hasMediaSource = computed(() => {
   return false;
 });
 
+const viewportWidth = ref(
+  typeof window !== "undefined" ? window.innerWidth : 1920,
+);
+const isNarrowLayout = computed(() => viewportWidth.value <= 1200);
+
 const highlightControlPanel = () => {
   const panel = document.querySelector(".stream-switch-module");
   if (panel) {
@@ -293,11 +789,18 @@ const drawDetections = (
   const scaleX = renderWidth / sourceWidth;
   const scaleY = renderHeight / sourceHeight;
 
-  detectionsToDraw.forEach((det) => {
-    const conf = det.confidence !== undefined ? det.confidence : det.score;
-    if (conf < confidence.value) return;
+  detectionsToDraw.forEach((det, index) => {
+    if (!isDetectionCategoryEnabled(det)) return;
+    const conf = normalizeConfidenceRatio(
+      det?.confidence ?? det?.score ?? det?.probability ?? det?.conf,
+    );
+    if (conf !== undefined && conf < confidence.value) return;
 
-    const [x1, y1, x2, y2] = det.bbox;
+    const bbox = normalizeDetectionBbox(
+      det?.bbox ?? det?.box ?? det?.xyxy ?? det?.rect ?? det?.coordinates,
+    );
+    if (!bbox || bbox.length < 4) return;
+    const [x1, y1, x2, y2] = bbox;
     const w = (x2 - x1) * scaleX;
     const h = (y2 - y1) * scaleY;
     const lx = x1 * scaleX + offsetX;
@@ -323,7 +826,8 @@ const drawDetections = (
     ctx.lineTo(lx, ly + h - 15);
     ctx.stroke();
 
-    const label = `${det.label} ${(conf * 100).toFixed(0)}%`;
+    const confText = conf === undefined ? "--" : `${(conf * 100).toFixed(0)}%`;
+    const label = `${normalizeDetectionLabel(det, index)} ${confText}`;
     ctx.font = "bold 14px Arial";
     const textWidth = ctx.measureText(label).width;
 
@@ -333,6 +837,159 @@ const drawDetections = (
     ctx.fillStyle = "#000";
     ctx.fillText(label, lx + 5, ly - 6);
   });
+};
+
+const getContainLayout = (
+  displayWidth,
+  displayHeight,
+  sourceWidth,
+  sourceHeight,
+) => {
+  const imageAspect = sourceWidth / sourceHeight;
+  const containerAspect = displayWidth / displayHeight;
+  let renderWidth;
+  let renderHeight;
+  let offsetX;
+  let offsetY;
+
+  if (imageAspect > containerAspect) {
+    renderWidth = displayWidth;
+    renderHeight = displayWidth / imageAspect;
+    offsetX = 0;
+    offsetY = (displayHeight - renderHeight) / 2;
+  } else {
+    renderHeight = displayHeight;
+    renderWidth = displayHeight * imageAspect;
+    offsetX = (displayWidth - renderWidth) / 2;
+    offsetY = 0;
+  }
+
+  return { renderWidth, renderHeight, offsetX, offsetY };
+};
+
+const drawMediaElementContain = (
+  ctx,
+  mediaEl,
+  targetWidth,
+  targetHeight,
+) => {
+  const sourceWidth = Number(mediaEl?.naturalWidth ?? mediaEl?.videoWidth);
+  const sourceHeight = Number(mediaEl?.naturalHeight ?? mediaEl?.videoHeight);
+  if (!sourceWidth || !sourceHeight) return false;
+
+  const layout = getContainLayout(
+    targetWidth,
+    targetHeight,
+    sourceWidth,
+    sourceHeight,
+  );
+
+  ctx.drawImage(
+    mediaEl,
+    layout.offsetX,
+    layout.offsetY,
+    layout.renderWidth,
+    layout.renderHeight,
+  );
+  return true;
+};
+
+const getScreenshotTimestamp = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const M = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  const s = String(now.getSeconds()).padStart(2, "0");
+  return `${y}${M}${d}-${h}${m}${s}`;
+};
+
+const downloadDataUrl = (dataUrl, filename) => {
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+const captureStageScreenshot = async () => {
+  if (screenshotInProgress.value) return;
+  screenshotInProgress.value = true;
+  try {
+    if (typeof document === "undefined") {
+      throw new Error("当前环境不支持截图");
+    }
+    if (!hasMediaSource.value) {
+      throw new Error("当前没有可截图画面");
+    }
+
+    const overlayCanvas = detectCanvas.value;
+    const stage = videoStageRef.value;
+    const targetWidth = Math.max(
+      1,
+      Number(overlayCanvas?.width) || Number(stage?.clientWidth) || 1280,
+    );
+    const targetHeight = Math.max(
+      1,
+      Number(overlayCanvas?.height) || Number(stage?.clientHeight) || 720,
+    );
+
+    const captureCanvas = document.createElement("canvas");
+    captureCanvas.width = targetWidth;
+    captureCanvas.height = targetHeight;
+    const ctx = captureCanvas.getContext("2d");
+    if (!ctx) throw new Error("截图上下文初始化失败");
+
+    ctx.fillStyle = "#020b19";
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+    let mediaDrawn = false;
+    if (activeMode.value === "stream" && streamImg.value?.complete) {
+      mediaDrawn = drawMediaElementContain(
+        ctx,
+        streamImg.value,
+        targetWidth,
+        targetHeight,
+      );
+    } else if (activeMode.value === "video" && localVideo.value) {
+      mediaDrawn = drawMediaElementContain(
+        ctx,
+        localVideo.value,
+        targetWidth,
+        targetHeight,
+      );
+    } else if (activeMode.value === "image" && localImg.value?.complete) {
+      mediaDrawn = drawMediaElementContain(
+        ctx,
+        localImg.value,
+        targetWidth,
+        targetHeight,
+      );
+    }
+
+    if (!mediaDrawn) {
+      throw new Error("画面还未加载完成，请稍后重试");
+    }
+
+    if (overlayCanvas && overlayCanvas.width > 0 && overlayCanvas.height > 0) {
+      ctx.drawImage(overlayCanvas, 0, 0, targetWidth, targetHeight);
+    }
+
+    const fileName = `doki-screenshot-${activeMode.value}-${getScreenshotTimestamp()}.png`;
+    const dataUrl = captureCanvas.toDataURL("image/png");
+    downloadDataUrl(dataUrl, fileName);
+    pushFrontendLog(`截图已保存：${fileName}`, "success");
+  } catch (error) {
+    const message = error?.message || "未知错误";
+    pushFrontendLog(`截图失败：${message}`, "error");
+    if (!mediaError.value) {
+      mediaError.value = message;
+    }
+  } finally {
+    screenshotInProgress.value = false;
+  }
 };
 
 // --- Stream Functions ---
@@ -746,7 +1403,10 @@ const detectImage = async () => {
 
     // 2. 再上传图片进行检测
     const formData = new FormData();
+    const uploadSummary = getStoredTaskSummaryForUpload();
     formData.append("file", imageFile.value);
+    formData.append("taskName", uploadSummary.taskName);
+    formData.append("scene", uploadSummary.scene);
 
     const response = await fetch(`${httpBase.value}/detections/image`, {
       method: "POST",
@@ -764,6 +1424,11 @@ const detectImage = async () => {
     canvasDetections = normalized.detections;
     imageSourceWidth.value = normalized.sourceWidth;
     imageSourceHeight.value = normalized.sourceHeight;
+    realtimeDetections.value = normalizeRealtimeDetectionRows(normalized.detections, {
+      idPrefix: "IMG",
+      timestampFallback: getLogTime(),
+    }).slice(0, 50);
+    detectionLoaded.value = true;
     pushFrontendLog(
       `图片检测完成，识别到 ${canvasDetections.length} 个目标`,
       "success",
@@ -812,11 +1477,26 @@ const redrawCanvasForCurrentMode = () => {
 };
 
 const handleResize = () => {
+  viewportWidth.value = window.innerWidth;
   redrawCanvasForCurrentMode();
 };
 
 watch(confidence, () => {
   redrawCanvasForCurrentMode();
+});
+
+watch(
+  enabledLabels,
+  () => {
+    redrawCanvasForCurrentMode();
+  },
+  { deep: true },
+);
+
+watch(httpBase, () => {
+  if (resourceTimer) {
+    fetchSystemResources();
+  }
 });
 
 // --- Fullscreen ---
@@ -853,16 +1533,21 @@ const handleUnhandledRejection = (event) => {
 
 onMounted(() => {
   pushFrontendLog("大屏页面已加载", "success");
+  viewportWidth.value = window.innerWidth;
+  loadTaskSummaryFromStorage();
   window.addEventListener("error", handleRuntimeError);
   window.addEventListener("unhandledrejection", handleUnhandledRejection);
 });
 
 onActivated(() => {
+  viewportWidth.value = window.innerWidth;
+  loadTaskSummaryFromStorage();
   window.addEventListener("resize", handleResize);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   setTimeout(() => handleResize(), 0);
   startApiCheck();
   startDetectionPolling();
+  startResourcePolling();
 });
 
 onDeactivated(() => {
@@ -870,6 +1555,7 @@ onDeactivated(() => {
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   stopApiCheck();
   stopDetectionPolling();
+  stopResourcePolling();
 });
 
 onUnmounted(() => {
@@ -887,6 +1573,7 @@ onUnmounted(() => {
   window.removeEventListener("unhandledrejection", handleUnhandledRejection);
   stopApiCheck();
   stopDetectionPolling();
+  stopResourcePolling();
 });
 
 // Time Range State (Upgraded to datetime-local)
@@ -924,16 +1611,23 @@ const categoryTree = [
   {
     key: "all",
     label: "全部",
-    children: [
-      { key: "person", label: "人员 (Person)", color: "#ff7b7b" },
-      { key: "vehicle", label: "车辆 (Vehicle)", color: "#61d9e8" },
-      { key: "facility", label: "设施 (Facility)", color: "#f6cf68" },
-      { key: "animal", label: "动物 (Animal)", color: "#a56af5" },
-    ],
+    children: DETECTION_CATEGORY_OPTIONS,
   },
 ];
 
 const categoryOptions = categoryTree[0].children;
+const allCategoryKeys = categoryOptions.map((item) => item.key);
+const selectedCategoryCount = computed(() =>
+  allCategoryKeys.filter((key) => enabledLabels.value.includes(key)).length,
+);
+const isAllCategoriesSelected = computed(
+  () => selectedCategoryCount.value === allCategoryKeys.length,
+);
+const isCategoryIndeterminate = computed(
+  () =>
+    selectedCategoryCount.value > 0 &&
+    selectedCategoryCount.value < allCategoryKeys.length,
+);
 const categoryColorMap = {
   "人员": "#ff7b7b",
   "车辆": "#61d9e8",
@@ -1022,14 +1716,23 @@ function toggleLabel(key) {
   enabledLabels.value = next;
 }
 
+function toggleAllCategories() {
+  enabledLabels.value = isAllCategoriesSelected.value ? [] : [...allCategoryKeys];
+}
+
 const completionRate = computed(() =>
-  Math.max(
-    0,
-    Math.min(
-      100,
-      Math.round((summary.value.map50 + summary.value.precision) / 2),
-    ),
-  ),
+  Math.max(0, Math.min(100, Math.round(((toNumberOrUndefined(summary.value.map50) ?? 0) + (toNumberOrUndefined(summary.value.precision) ?? 0)) / 2))),
+);
+const hasCompletionData = computed(
+  () =>
+    toNumberOrUndefined(summary.value.map50) !== undefined ||
+    toNumberOrUndefined(summary.value.precision) !== undefined,
+);
+const completionRateText = computed(() =>
+  hasCompletionData.value ? `${completionRate.value}%` : "--",
+);
+const onlineTargetText = computed(() =>
+  detectionLoaded.value ? String(detections.value.length) : "--",
 );
 
 const hoveredCompletion = ref(null);
@@ -1143,7 +1846,7 @@ const setCategoryHover = (name) => {
 </script>
 
 <template>
-  <div class="dashboard-screen">
+  <div class="dashboard-screen" :class="{ 'mobile-layout': isNarrowLayout }">
     <div class="hero-layout">
       <!-- Left Column: Video Monitoring Area (65%) -->
       <div class="video-section">
@@ -1396,7 +2099,7 @@ const setCategoryHover = (name) => {
                     ? "本地视频"
                     : "本地图片"
               }}
-              | 1920x1080 | {{ summary.latency }}ms
+              | 1920x1080 | {{ displayValue(summary.latency, "ms") }}
             </div>
 
             <!-- Fullscreen Toggle Button -->
@@ -1450,7 +2153,7 @@ const setCategoryHover = (name) => {
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">推理耗时</span>
-                  <strong class="model-info-value highlight">{{ summary.latency }}ms</strong>
+                  <strong class="model-info-value highlight">{{ displayValue(summary.latency, "ms") }}</strong>
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">输入尺寸</span>
@@ -1471,19 +2174,19 @@ const setCategoryHover = (name) => {
               <div class="summary-pairs">
                 <div class="summary-pair">
                   <span>当前任务</span>
-                  <strong>{{ task.name }}</strong>
+                  <strong>{{ displayText(dashboardTaskSummary.taskName) }}</strong>
                 </div>
                 <div class="summary-pair">
                   <span>场景</span>
-                  <strong>{{ task.scene }}</strong>
+                  <strong>{{ displayText(dashboardTaskSummary.scene) }}</strong>
                 </div>
                 <div class="summary-pair">
-                  <span>输入源</span>
-                  <strong>{{ task.source }}</strong>
+                  <span>任务类型</span>
+                  <strong>{{ displayText(dashboardTaskSummary.taskType) }}</strong>
                 </div>
                 <div class="summary-pair">
                   <span>在线目标</span>
-                  <strong>{{ detections.length }}</strong>
+                  <strong>{{ onlineTargetText }}</strong>
                 </div>
               </div>
             </div>
@@ -1492,7 +2195,7 @@ const setCategoryHover = (name) => {
             <div class="subpanel resource-module-mini">
               <div class="subpanel-title">
                 系统资源
-                <span class="temp-badge-mini">{{ resources.temp }}°C</span>
+                <span class="temp-badge-mini">{{ displayValue(resources.temp, "°C") }}</span>
               </div>
               <div class="resource-grid-mini">
                 <div class="res-row-mini">
@@ -1500,30 +2203,30 @@ const setCategoryHover = (name) => {
                   <div class="res-track-mini">
                     <div
                       class="res-fill cpu"
-                      :style="{ width: `${resources.cpu}%` }"
+                      :style="{ width: barWidth(resources.cpu) }"
                     ></div>
                   </div>
-                  <strong>{{ resources.cpu }}%</strong>
+                  <strong>{{ displayPercent(resources.cpu) }}</strong>
                 </div>
                 <div class="res-row-mini">
                   <span>GPU</span>
                   <div class="res-track-mini">
                     <div
                       class="res-fill gpu"
-                      :style="{ width: `${resources.gpu}%` }"
+                      :style="{ width: barWidth(resources.gpu) }"
                     ></div>
                   </div>
-                  <strong>{{ resources.gpu }}%</strong>
+                  <strong>{{ displayPercent(resources.gpu) }}</strong>
                 </div>
                 <div class="res-row-mini">
                   <span>MEM</span>
                   <div class="res-track-mini">
                     <div
                       class="res-fill mem"
-                      :style="{ width: `${resources.memory}%` }"
+                      :style="{ width: barWidth(resources.memory) }"
                     ></div>
                   </div>
-                  <strong>{{ resources.memory }}%</strong>
+                  <strong>{{ displayPercent(resources.memory) }}</strong>
                 </div>
               </div>
             </div>
@@ -1566,8 +2269,8 @@ const setCategoryHover = (name) => {
                 </div>
                 <input
                   type="range"
-                  min="0.3"
-                  max="0.95"
+                  min="0.05"
+                  max="0.99"
                   step="0.01"
                   v-model.number="confidence"
                 />
@@ -1596,8 +2299,19 @@ const setCategoryHover = (name) => {
             <div class="tree-filter">
               <div class="tree-node root">
                 <div class="node-content">
-                  <span class="folder-icon">📂</span>
-                  <span>全选类别</span>
+                  <label class="tree-all-toggle">
+                    <input
+                      type="checkbox"
+                      :checked="isAllCategoriesSelected"
+                      :indeterminate.prop="isCategoryIndeterminate"
+                      @change="toggleAllCategories"
+                    />
+                    <span class="folder-icon">📁</span>
+                    <span>全选类别</span>
+                  </label>
+                  <span class="tree-selected-count">
+                    {{ selectedCategoryCount }}/{{ categoryOptions.length }}
+                  </span>
                 </div>
                 <div class="tree-children">
                   <label
@@ -1780,10 +2494,19 @@ const setCategoryHover = (name) => {
               <h4>快速操作</h4>
             </div>
             <div class="tool-grid">
-              <button class="tool-btn" title="导出报告">📄 导出</button>
-              <button class="tool-btn" title="截图">📷 截图</button>
-              <button class="tool-btn" title="录屏">🎥 录屏</button>
-              <button class="tool-btn" title="设置">⚙️ 设置</button>
+              <button
+                class="tool-btn"
+                title="新建任务"
+                @click="openQuickCreateTaskDialog"
+              >新建任务</button>
+              <button
+                class="tool-btn"
+                title="截图"
+                :disabled="screenshotInProgress"
+                @click="captureStageScreenshot"
+              >{{ screenshotInProgress ? "截图中..." : "截图" }}</button>
+              <button class="tool-btn" title="录屏">录屏</button>
+              <button class="tool-btn" title="设置">设置</button>
             </div>
           </div>
 
@@ -1820,8 +2543,8 @@ const setCategoryHover = (name) => {
           <div class="stats-top">
             <div class="stats-chart-card">
               <div class="stats-chart-title">
-                <span>完成姣斾緥</span>
-                <strong>{{ completionRate }}%</strong>
+                <span>完成率</span>
+                <strong>{{ completionRateText }}</strong>
               </div>
               <div
                 class="pie-chart-wrapper"
@@ -1840,8 +2563,8 @@ const setCategoryHover = (name) => {
                   <circle cx="16" cy="16" r="10" fill="var(--bg-panel)" />
                 </svg>
                 <div class="pie-center-text">
-                  <strong>{{ completionRate }}%</strong>
-                  <small>完成搴</small>
+                  <strong>{{ completionRateText }}</strong>
+                  <small>完成率</small>
                 </div>
                 <div v-if="hoveredCompletion" class="pie-tooltip">
                   <strong>{{ hoveredCompletion.name }}</strong>
@@ -1853,7 +2576,7 @@ const setCategoryHover = (name) => {
             <div class="stats-chart-card">
               <div class="stats-chart-title">
                 <span>分类占比</span>
-                <strong>{{ detections.length }}个</strong>
+                <strong>{{ onlineTargetText === "--" ? "--" : onlineTargetText + "个" }}</strong>
               </div>
               <div
                 class="pie-chart-wrapper"
@@ -1872,7 +2595,7 @@ const setCategoryHover = (name) => {
                   <circle cx="16" cy="16" r="10" fill="var(--bg-panel)" />
                 </svg>
                 <div class="pie-center-text">
-                  <strong>{{ detections.length }}</strong>
+                  <strong>{{ onlineTargetText }}</strong>
                   <small>目标数</small>
                 </div>
                 <div v-if="hoveredCategory" class="pie-tooltip">
@@ -1919,10 +2642,10 @@ const setCategoryHover = (name) => {
                 <strong>{{ item.name }}</strong>
               </div>
               <div class="stats-detail-meta">
-                <span>目标 {{ item.value }}</span>
-                <span>P {{ item.precision }}%</span>
-                <span>R {{ item.recall }}%</span>
-                <span>F1 {{ item.f1 }}%</span>
+                <span>目标 {{ item.value ?? "--" }}</span>
+                <span>P {{ displayPercent(item.precision) }}</span>
+                <span>R {{ displayPercent(item.recall) }}</span>
+                <span>F1 {{ displayPercent(item.f1) }}</span>
               </div>
             </div>
           </div>
@@ -1936,7 +2659,7 @@ const setCategoryHover = (name) => {
           <div class="module-header">
             <h4>系统日志</h4>
             <button class="icon-btn" title="清空" @click="clearFrontendLogs">
-              🗑️
+              清空
             </button>
           </div>
           <div class="log-list">
@@ -1956,7 +2679,7 @@ const setCategoryHover = (name) => {
     <div class="panel result-card dashboard-wide-section">
       <div class="section-title">
         <h3>实时检测结果</h3>
-        <span class="pill">{{ realtimeDetections.length }} 条</span>
+        <span class="pill">{{ filteredRealtimeDetections.length }} 条</span>
       </div>
       <div class="detection-table-scroll">
         <table>
@@ -1970,20 +2693,82 @@ const setCategoryHover = (name) => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in realtimeDetections" :key="item.id || item.detectionId">
+            <tr v-for="item in filteredRealtimeDetections" :key="item.id || item.detectionId">
               <td>{{ item.timestamp || '--' }}</td>
               <td>{{ item.id || item.detectionId || '--' }}</td>
               <td>{{ item.label || item.className || '--' }}</td>
-              <td>{{ item.score !== undefined ? Math.round(item.score * 100) + '%' : (item.confidence !== undefined ? Math.round(item.confidence * 100) + '%' : '--') }}</td>
-              <td>{{ item.bbox ? (Array.isArray(item.bbox) ? item.bbox.join(', ') : item.bbox) : '--' }}</td>
+              <td>{{ formatDetectionConfidence(item) }}</td>
+              <td>{{ formatDetectionBbox(item) }}</td>
             </tr>
-            <tr v-if="realtimeDetections.length === 0">
+            <tr v-if="filteredRealtimeDetections.length === 0">
               <td colspan="5" style="text-align:center;color:var(--text-dim);padding:24px 0;">等待后端检测数据...</td>
             </tr>
           </tbody>
         </table>
       </div>
     </div>
+
+    <teleport to="body">
+      <div
+        v-if="quickTaskDialogVisible"
+        class="dashboard-task-dialog-overlay"
+        @click.self="closeQuickCreateTaskDialog"
+      >
+        <div class="dashboard-task-dialog">
+          <div class="dashboard-task-dialog-header">
+            <h4>新建任务</h4>
+            <button
+              type="button"
+              class="dashboard-task-dialog-close"
+              @click="closeQuickCreateTaskDialog"
+            >&times;</button>
+          </div>
+          <div class="dashboard-task-dialog-body">
+            <label class="dashboard-task-form-field">
+              <span>任务名称</span>
+              <input
+                type="text"
+                v-model="quickTaskName"
+                placeholder="输入任务名称"
+                @keyup.enter="confirmQuickCreateTask"
+              />
+            </label>
+            <label class="dashboard-task-form-field">
+              <span>场景</span>
+              <select v-model="quickTaskScene">
+                <option value="" disabled>请选择场景</option>
+                <option v-for="s in quickTaskSceneOptions" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </label>
+            <div class="dashboard-task-form-field">
+              <span>创建时间</span>
+              <div class="dashboard-task-auto-time">自动设置为当前时间</div>
+            </div>
+            <label class="dashboard-task-form-field">
+              <span>输入源</span>
+              <select v-model="quickTaskSource">
+                <option value="" disabled>请选择输入源</option>
+                <option v-for="s in quickTaskSourceOptions" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="dashboard-task-dialog-footer">
+            <div class="dashboard-task-tip">
+              Tip：新建的任务信息将存储到本地，每次新建任务会覆盖掉之前的值，请确认当前任务完成后再新建任务！
+            </div>
+            <div class="dashboard-task-dialog-actions">
+              <button type="button" class="dashboard-task-btn" @click="closeQuickCreateTaskDialog">取消</button>
+              <button
+                type="button"
+                class="dashboard-task-btn primary"
+                :disabled="!quickTaskName.trim() || !quickTaskScene || !quickTaskSource.trim()"
+                @click="confirmQuickCreateTask"
+              >确认创建</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </teleport>
   </div>
 </template>
 
