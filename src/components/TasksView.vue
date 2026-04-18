@@ -1369,6 +1369,14 @@ function isCrossOriginImageUrl(rawUrl) {
   }
 }
 
+function clearTaskSummaryFromStorage() {
+  try {
+    localStorage.removeItem(DASHBOARD_TASK_SUMMARY_KEY);
+  } catch {
+    // Ignore storage remove failures
+  }
+}
+
 function triggerDirectDownload(rawUrl, filename) {
   const href = String(rawUrl ?? '').trim();
   if (!href) return false;
@@ -1822,6 +1830,7 @@ const showStatusMenu = ref(null);
 function setStatus(task, status, e) {
   e.stopPropagation();
   task.status = 'finished';
+  clearTaskSummaryFromStorage();
   showStatusMenu.value = null;
 }
 
@@ -1940,13 +1949,13 @@ onUnmounted(() => {
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
         </button>
-        <button class="action-btn primary" @click="openAddDialog">+ 新建任务</button>
+        <button class="action-btn primary" data-guide="tasks.create" @click="openAddDialog">+ 新建任务</button>
       </div>
     </div>
 
     <!-- 搜索栏 -->
     <div class="tasks-toolbar">
-      <div class="search-box">
+      <div class="search-box" data-guide="tasks.search">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="8"/>
           <line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -1970,7 +1979,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="table-wrap">
+    <div class="table-wrap" data-guide="tasks.table">
       <table>
         <thead>
           <tr>

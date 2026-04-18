@@ -13,10 +13,13 @@ import { useDataStore } from "./stores/useDataStore";
 import { useConfigStore } from "./stores/useConfigStore";
 import { storeToRefs } from "pinia";
 import AiAssistant from "./components/AiAssistant.vue";
+import AppGuideIntro from "./components/AppGuideIntro.vue";
+import AppGuideOverlay from "./components/AppGuideOverlay.vue";
+import { useOnboardingGuide } from "./guide/useOnboardingGuide";
 import {
-  AUTH_SESSION_KEY,
-  clearAuthSession,
+  fetchAuthSession,
   getAuthSession,
+  logoutFromBackend,
 } from "./utils/auth";
 
 const route = useRoute();
@@ -49,6 +52,22 @@ const tabs = [
 const isAuthRoute = computed(() => route.name === "auth");
 const activeTab = computed(() => route.name || "dashboard");
 const authUsername = ref("");
+const {
+  isGuideIntroVisible,
+  isGuideVisible,
+  currentGuideStep,
+  currentGuideStepIndex,
+  totalGuideSteps,
+  currentGuideTargetRect,
+  startGuideFromIntro,
+  skipGuideFromIntro,
+  nextGuideStep,
+  skipGuide,
+} = useOnboardingGuide({
+  route,
+  router,
+  isAuthRoute,
+});
 
 function navigate(key) {
   router.push({ name: key });
@@ -63,7 +82,12 @@ function updatePadding() {
 }
 
 function refreshAuthUser() {
-  authUsername.value = getAuthSession()?.username || "";
+  const currentSession = getAuthSession();
+  authUsername.value =
+    currentSession?.displayName ||
+    currentSession?.username ||
+    currentSession?.email ||
+    "";
 }
 
 function startObserveHeader() {
@@ -86,13 +110,8 @@ function setupHeaderLayout() {
   startObserveHeader();
 }
 
-function handleStorageSync(event) {
-  if (event?.key && event.key !== AUTH_SESSION_KEY) return;
-  refreshAuthUser();
-}
-
-function logout() {
-  clearAuthSession();
+async function logout() {
+  await logoutFromBackend();
   refreshAuthUser();
   router.replace({ name: "auth" });
 }
@@ -118,19 +137,18 @@ onErrorCaptured((err, instance, info) => {
   return false;
 });
 
-onMounted(() => {
+onMounted(async () => {
+  await fetchAuthSession();
   refreshAuthUser();
   if (!isAuthRoute.value) {
     setupHeaderLayout();
   }
   window.addEventListener("resize", updatePadding);
-  window.addEventListener("storage", handleStorageSync);
 });
 
 onUnmounted(() => {
   stopObserveHeader();
   window.removeEventListener("resize", updatePadding);
-  window.removeEventListener("storage", handleStorageSync);
 });
 
 watch(
@@ -174,7 +192,7 @@ watch(
       </div>
 
       <nav class="header-center">
-        <div class="nav-list">
+        <div class="nav-list" data-guide="app.nav">
           <button
             v-for="tab in tabs"
             :key="tab.key"
@@ -190,6 +208,7 @@ watch(
       <div class="header-right">
         <button
           class="theme-toggle"
+          data-guide="app.theme-toggle"
           @click="toggleTheme"
           :title="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
         >
@@ -198,9 +217,9 @@ watch(
         </button>
         <div class="header-user-block">
           <span class="user-chip">{{ authUsername || "已登录用户" }}</span>
-          <button class="logout-btn" @click="logout">退出登录</button>
+          <button class="logout-btn" data-guide="app.logout" @click="logout">退出登录</button>
         </div>
-        <div class="topbar-status">
+        <div class="topbar-status" data-guide="app.status">
           <span class="status-dot"></span>
           <span>系统状态: 运行中</span>
           <strong>| 帧率: {{ summary.fps ?? '--' }} FPS</strong>
@@ -243,6 +262,20 @@ watch(
     </main>
 
     <AiAssistant />
+    <AppGuideIntro
+      :visible="isGuideIntroVisible"
+      @start="startGuideFromIntro"
+      @skip="skipGuideFromIntro"
+    />
+    <AppGuideOverlay
+      v-if="isGuideVisible && currentGuideStep"
+      :step="currentGuideStep"
+      :step-index="currentGuideStepIndex"
+      :total-steps="totalGuideSteps"
+      :target-rect="currentGuideTargetRect"
+      @next="nextGuideStep"
+      @skip="skipGuide"
+    />
   </div>
 </template>
 

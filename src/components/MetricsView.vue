@@ -753,13 +753,13 @@ watch(theme, async () => {
 
 <template>
   <section class="metrics-grid">
-    <div class="panel metrics-panel-wide">
+    <div class="panel metrics-panel-wide" data-guide="metrics.overview">
       <div class="panel-header">
         <h3>核心指标总览</h3>
         <div class="panel-actions">
           <span v-if="fetchError" class="update-time" style="color: var(--danger)">{{ fetchError }}</span>
           <span v-else class="update-time">{{ useBackendData ? '实时数据' : '--' }} | 更新 {{ lastUpdatedText }}</span>
-          <button class="ghost-btn" @click="refreshMetrics" :disabled="loading">
+          <button class="ghost-btn" data-guide="metrics.refresh" @click="refreshMetrics" :disabled="loading">
             {{ loading ? '加载中...' : '刷新数据' }}
           </button>
         </div>

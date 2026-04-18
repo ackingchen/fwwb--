@@ -1,145 +1,244 @@
-export const AUTH_ACCOUNTS_KEY = "uav_local_accounts_v1";
+import axios from "axios";
+
+export const AUTH_ENDPOINTS = Object.freeze({
+  register: "/api/auth/register",
+  login: "/api/auth/login",
+  session: "/api/auth/session",
+  logout: "/api/auth/logout",
+});
 export const AUTH_SESSION_KEY = "uav_auth_session_v1";
+
+const authHttp = axios.create({
+  withCredentials: true,
+  timeout: 12000,
+});
+
+const SESSION_STATE = {
+  loaded: false,
+  user: null,
+};
 
 function getStorage() {
   if (typeof window === "undefined") return null;
-  return window.localStorage ?? null;
-}
-
-function readJson(key, fallbackValue) {
-  const storage = getStorage();
-  if (!storage) return fallbackValue;
   try {
-    const raw = storage.getItem(key);
-    if (!raw) return fallbackValue;
-    return JSON.parse(raw);
+    return window.localStorage;
   } catch {
-    return fallbackValue;
+    return null;
   }
 }
 
-function writeJson(key, value) {
-  const storage = getStorage();
-  if (!storage) return false;
-  try {
-    storage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeUsername(value) {
+function toTrimmedText(value) {
   return String(value ?? "").trim();
 }
 
-function normalizePassword(value) {
-  return String(value ?? "");
+function makeValidationError(message) {
+  const error = new Error(message);
+  error.code = "VALIDATION_ERROR";
+  return error;
 }
 
-function sanitizeAccount(value) {
-  if (!value || typeof value !== "object") return null;
-  const username = normalizeUsername(value.username);
-  const password = normalizePassword(value.password);
-  if (!username || !password) return null;
-  return {
-    username,
-    password,
-    createdAt: String(value.createdAt ?? ""),
-  };
+function isValidationError(error) {
+  return error?.code === "VALIDATION_ERROR";
 }
 
-export function getStoredAccounts() {
-  const list = readJson(AUTH_ACCOUNTS_KEY, []);
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((item) => sanitizeAccount(item))
-    .filter((item) => item !== null);
+function readMessageFromError(error, fallback = "请求失败，请稍后重试") {
+  const payload = error?.response?.data;
+  const candidate =
+    payload?.message ??
+    payload?.msg ??
+    payload?.error ??
+    error?.message ??
+    "";
+  const text = toTrimmedText(candidate);
+  return text || fallback;
 }
 
-export function createLocalAccount({ username, password }) {
-  const normalizedUsername = normalizeUsername(username);
-  const normalizedPassword = normalizePassword(password);
+function toAuthUser(payload) {
+  const source =
+    payload?.user ??
+    payload?.data?.user ??
+    payload?.data ??
+    payload ??
+    null;
+  if (!source || typeof source !== "object") return null;
 
-  if (normalizedUsername.length < 3) {
-    return { ok: false, message: "用户名至少需要 3 个字符" };
-  }
-  if (normalizedPassword.length < 6) {
-    return { ok: false, message: "密码至少需要 6 位" };
-  }
-
-  const accounts = getStoredAccounts();
-  const isDuplicated = accounts.some(
-    (item) => item.username.toLowerCase() === normalizedUsername.toLowerCase(),
+  const username = toTrimmedText(
+    source.username ?? source.account ?? source.userName ?? source.email,
   );
-  if (isDuplicated) {
-    return { ok: false, message: "用户名已存在，请直接登录" };
-  }
-
-  const createdAccount = {
-    username: normalizedUsername,
-    password: normalizedPassword,
-    createdAt: new Date().toISOString(),
-  };
-  const nextAccounts = [createdAccount, ...accounts];
-  writeJson(AUTH_ACCOUNTS_KEY, nextAccounts);
-
-  return { ok: true, account: createdAccount };
-}
-
-export function validateAccountLogin({ username, password }) {
-  const normalizedUsername = normalizeUsername(username);
-  const normalizedPassword = normalizePassword(password);
-  if (!normalizedUsername || !normalizedPassword) {
-    return { ok: false, message: "请输入用户名和密码" };
-  }
-
-  const accounts = getStoredAccounts();
-  const matchedAccount = accounts.find(
-    (item) =>
-      item.username.toLowerCase() === normalizedUsername.toLowerCase() &&
-      item.password === normalizedPassword,
+  const email = toTrimmedText(source.email ?? source.mail);
+  const displayName = toTrimmedText(
+    source.displayName ??
+      source.nickname ??
+      source.name ??
+      username ??
+      email,
   );
+  const uid = toTrimmedText(source.id ?? source.userId ?? source.uid);
 
-  if (!matchedAccount) {
-    return { ok: false, message: "账号或密码错误" };
-  }
-
-  return { ok: true, account: matchedAccount };
-}
-
-export function setAuthSession(username) {
-  const normalizedUsername = normalizeUsername(username);
-  if (!normalizedUsername) return null;
-  const nextSession = {
-    username: normalizedUsername,
-    loginAt: new Date().toISOString(),
-  };
-  writeJson(AUTH_SESSION_KEY, nextSession);
-  return nextSession;
-}
-
-export function getAuthSession() {
-  const session = readJson(AUTH_SESSION_KEY, null);
-  if (!session || typeof session !== "object") return null;
-  const username = normalizeUsername(session.username);
-  if (!username) return null;
+  if (!displayName && !username && !email) return null;
   return {
-    username,
-    loginAt: String(session.loginAt ?? ""),
+    id: uid,
+    username: username || email,
+    email,
+    displayName: displayName || username || email,
   };
 }
 
-export function hasAuthSession() {
-  return Boolean(getAuthSession());
+function readSessionFromStorage() {
+  const storage = getStorage();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return toAuthUser(parsed);
+  } catch {
+    return null;
+  }
 }
 
-export function clearAuthSession() {
+function writeSessionToStorage(user) {
   const storage = getStorage();
   if (!storage) return;
   try {
-    storage.removeItem(AUTH_SESSION_KEY);
+    if (!user) {
+      storage.removeItem(AUTH_SESSION_KEY);
+      return;
+    }
+    storage.setItem(AUTH_SESSION_KEY, JSON.stringify(user));
   } catch {
-    // ignore storage failures
+    // Ignore storage failures.
+  }
+}
+
+function setSession(user) {
+  SESSION_STATE.loaded = true;
+  SESSION_STATE.user = user ? { ...user } : null;
+  writeSessionToStorage(SESSION_STATE.user);
+  return SESSION_STATE.user;
+}
+
+function setSessionFromPayload(payload) {
+  const parsedUser = toAuthUser(payload);
+  return setSession(parsedUser);
+}
+
+export function getAuthSession() {
+  return SESSION_STATE.user ? { ...SESSION_STATE.user } : null;
+}
+
+export function clearAuthSession() {
+  setSession(null);
+}
+
+export async function fetchAuthSession({ force = false } = {}) {
+  if (SESSION_STATE.loaded && !force) {
+    return getAuthSession();
+  }
+
+  const localSession = readSessionFromStorage();
+  if (localSession && !force) {
+    return setSession(localSession);
+  }
+
+  try {
+    const { data } = await authHttp.get(AUTH_ENDPOINTS.session);
+    const user = setSessionFromPayload(data) || (localSession ? setSession(localSession) : null);
+    return user;
+  } catch {
+    if (localSession) {
+      return setSession(localSession);
+    }
+    clearAuthSession();
+    return null;
+  }
+}
+
+export async function registerWithBackend({ account, password }) {
+  const normalizedAccount = toTrimmedText(account);
+  const normalizedPassword = String(password ?? "");
+
+  if (!normalizedAccount) {
+    throw makeValidationError("请输入账号");
+  }
+  if (normalizedPassword.length < 6) {
+    throw makeValidationError("密码至少需要 6 位");
+  }
+
+  try {
+    const { data } = await authHttp.post(AUTH_ENDPOINTS.register, {
+      account: normalizedAccount,
+      password: normalizedPassword,
+    });
+    return data;
+  } catch (error) {
+    if (isValidationError(error)) {
+      throw error;
+    }
+    // Temporary competition fallback: backend register API unavailable.
+    return {
+      ok: true,
+      mock: true,
+      account: normalizedAccount,
+    };
+  }
+}
+
+export async function loginWithBackend({ account, password }) {
+  const normalizedAccount = toTrimmedText(account);
+  const normalizedPassword = String(password ?? "");
+
+  if (!normalizedAccount || !normalizedPassword) {
+    throw makeValidationError("请输入账号和密码");
+  }
+
+  try {
+    const { data } = await authHttp.post(AUTH_ENDPOINTS.login, {
+      account: normalizedAccount,
+      password: normalizedPassword,
+    });
+
+    const user =
+      setSessionFromPayload(data) ||
+      setSession({
+        id: "",
+        username: normalizedAccount,
+        email: "",
+        displayName: normalizedAccount,
+      });
+
+    return {
+      user,
+      data,
+    };
+  } catch (error) {
+    if (isValidationError(error)) {
+      throw error;
+    }
+    // Temporary competition fallback: allow login when backend is not ready.
+    const user = setSession({
+      id: "",
+      username: normalizedAccount,
+      email: "",
+      displayName: normalizedAccount,
+    });
+    return {
+      user,
+      data: {
+        ok: true,
+        mock: true,
+      },
+      message: readMessageFromError(error, "后端未就绪，已进入演示登录模式"),
+    };
+  }
+}
+
+export async function logoutFromBackend() {
+  try {
+    await authHttp.post(AUTH_ENDPOINTS.logout);
+  } catch {
+    // Ignore backend logout failures and clear frontend cache anyway.
+  } finally {
+    clearAuthSession();
   }
 }

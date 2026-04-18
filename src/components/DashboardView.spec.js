@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import DashboardView from "./DashboardView.vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useConfigStore } from "../stores/useConfigStore";
@@ -34,6 +34,14 @@ vi.mock("axios", () => {
 describe("DashboardView", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    localStorage.setItem(
+      "dashboard_task_summary",
+      JSON.stringify({ taskName: "测试任务", taskType: "视频", scene: "城市" }),
+    );
+  });
+
+  afterEach(() => {
+    localStorage.removeItem("dashboard_task_summary");
   });
 
   it("renders system status correctly", () => {

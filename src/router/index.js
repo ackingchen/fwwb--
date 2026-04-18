@@ -4,14 +4,14 @@ import MetricsView from "../components/MetricsView.vue";
 import TasksView from "../components/TasksView.vue";
 import SettingsView from "../components/SettingsView.vue";
 import AuthView from "../components/AuthView.vue";
-import { hasAuthSession } from "../utils/auth";
+import { fetchAuthSession } from "../utils/auth";
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: "/",
-      redirect: () => (hasAuthSession() ? "/dashboard" : "/auth"),
+      redirect: "/dashboard",
     },
     {
       path: "/auth",
@@ -44,8 +44,9 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
-  const sessionExists = hasAuthSession();
+router.beforeEach(async (to) => {
+  const currentSession = await fetchAuthSession();
+  const sessionExists = Boolean(currentSession);
   const isPublicRoute = Boolean(to.meta?.public);
 
   if (!isPublicRoute && !sessionExists) {

@@ -152,6 +152,66 @@ const loadTaskSummaryFromStorage = () => {
   }
 };
 
+const readTaskSummaryFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_TASK_SUMMARY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      taskName: String(parsed.taskName ?? "").trim(),
+      taskType: normalizeTaskTypeLabel(parsed.taskType),
+      scene: String(parsed.scene ?? "").trim(),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const hasTaskSummaryValue = (payload) =>
+  Boolean(
+    payload &&
+      typeof payload === "object" &&
+      String(payload.taskName ?? "").trim() &&
+      String(payload.scene ?? "").trim(),
+  );
+
+const clearTaskSummaryAfterCompletion = (modeLabel = "当前任务") => {
+  applyTaskSummary({});
+  try {
+    localStorage.removeItem(DASHBOARD_TASK_SUMMARY_KEY);
+  } catch {
+    // Ignore storage remove failures
+  }
+  pushFrontendLog(`${modeLabel}已完成，任务信息已清空；下次执行前请先新建任务`, "info");
+};
+
+const ensureTaskSummaryBeforeExecution = (modeLabel = "当前任务") => {
+  const storedSummary = readTaskSummaryFromStorage();
+  if (hasTaskSummaryValue(storedSummary)) {
+    applyTaskSummary(storedSummary);
+    return true;
+  }
+
+  mediaError.value = "未检测到任务信息，请先新建任务";
+  pushFrontendLog(`${modeLabel}执行前未检测到任务信息，请先新建任务`, "warning");
+
+  let shouldOpenCreateDialog = true;
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    try {
+      shouldOpenCreateDialog = window.confirm(
+        "当前没有任务信息（dashboard_task_summary 为空），请先新建任务。是否现在新建？",
+      );
+    } catch {
+      shouldOpenCreateDialog = true;
+    }
+  }
+  if (shouldOpenCreateDialog) {
+    openQuickCreateTaskDialog();
+  }
+  return false;
+};
+
 const dashboardTaskSummary = computed(() => {
   const fallbackType = normalizeTaskTypeLabel(task.value?.taskType ?? task.value?.taskTypeLabel);
   return {
@@ -1954,7 +2014,18 @@ const startStreamSnapshotInterval = () => {
   clearStreamSnapshotInterval();
   streamSnapshotInterval = setInterval(() => {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
-    streamWs.send(JSON.stringify({ command: "snapshot" }));
+    const taskPayload = resolveWsTaskPayload("stream");
+    streamWs.send(
+      JSON.stringify({
+        command: "snapshot",
+        url: streamRtspUrl.value,
+        taskName: taskPayload.taskName,
+        taskType: taskPayload.taskType,
+        taskTypeLabel: taskPayload.taskTypeLabel,
+        scene: taskPayload.scene,
+        scence: taskPayload.scence,
+      }),
+    );
   }, WS_SNAPSHOT_INTERVAL_MS);
 };
 
@@ -1982,7 +2053,11 @@ const toggleStream = () => {
     });
     refreshMapTargetsFromVisibleDetections([]);
     pushFrontendLog("已停止实时流检测", "info");
+    clearTaskSummaryAfterCompletion("实时流任务");
   } else {
+    if (!ensureTaskSummaryBeforeExecution("实时流任务")) {
+      return;
+    }
     if (isOffline.value) {
       mediaError.value = "当前网络不可用，请检查网络连接";
       pushFrontendLog("实时流连接失败：网络不可用", "warning");
@@ -2009,6 +2084,11 @@ const toggleStream = () => {
       };
       streamWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        if (typeof data?.error === "string" && data.error.trim()) {
+          mediaError.value = data.error.trim();
+          pushFrontendLog(`实时流后端错误: ${data.error.trim()}`, "error");
+          return;
+        }
         if (data.image) {
           streamBase64.value = "data:image/jpeg;base64," + data.image;
           canvasDetections = Array.isArray(data.detections) ? data.detections : [];
@@ -2242,11 +2322,16 @@ const toggleVideoDetection = () => {
     if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
     refreshMapTargetsFromVisibleDetections([]);
     pushFrontendLog("已停止视频检测", "info");
+    clearTaskSummaryAfterCompletion("视频任务");
     return;
   }
 
   if (!videoFile.value) {
     pushFrontendLog("无法开始视频检测：未选择视频文件", "warning");
+    return;
+  }
+
+  if (!ensureTaskSummaryBeforeExecution("视频任务")) {
     return;
   }
 
@@ -2527,6 +2612,9 @@ const ensureReferenceTxtForImageDetection = async () => {
 const detectImage = async () => {
   if (!imageFile.value) return;
   mediaError.value = "";
+  if (!ensureTaskSummaryBeforeExecution("图片任务")) {
+    return;
+  }
   if (isOffline.value) {
     mediaError.value = "当前网络不可用，无法连接云端识别服务";
     pushFrontendLog("图片检测失败：网络不可用", "warning");
@@ -2605,6 +2693,7 @@ const detectImage = async () => {
       `图片检测完成，识别到 ${canvasDetections.length} 个目标`,
       "success",
     );
+    clearTaskSummaryAfterCompletion("图片任务");
 
     onLocalImageLoaded();
   } catch (error) {
@@ -3396,7 +3485,7 @@ watch(
     <div class="hero-layout">
       <!-- Left Column: Video Monitoring Area (65%) -->
       <div class="video-section">
-        <div class="panel video-card">
+        <div class="panel video-card" data-guide="dashboard.video">
           <div class="section-title">
             <h3>实时检测画面</h3>
           </div>
@@ -3786,6 +3875,7 @@ watch(
           <!-- Module 1: Target Map (Moved from Auxiliary Section) -->
           <div
             class="dashboard-card stats-module-large dashboard-map-module"
+            data-guide="dashboard.map"
             style="flex: 0 0 auto; grid-column: span 2"
           >
             <div class="module-header">
@@ -3872,6 +3962,7 @@ watch(
           <!-- Module 3: Stream Switch Module -->
           <div
             class="dashboard-card stream-switch-module"
+            data-guide="dashboard.stream"
             style="flex: 0 0 auto"
           >
             <div class="module-header">
@@ -4023,13 +4114,14 @@ watch(
           </div>
 
           <!-- Module 4: Quick Actions -->
-          <div class="dashboard-card quick-module" style="flex: 0 0 auto">
+          <div class="dashboard-card quick-module" data-guide="dashboard.quick" style="flex: 0 0 auto">
             <div class="module-header">
               <h4>快速操作</h4>
             </div>
             <div class="tool-grid">
               <button
                 class="tool-btn"
+                data-guide="dashboard.quick-new-task"
                 title="新建任务"
                 @click="openQuickCreateTaskDialog"
               >新建任务</button>
@@ -4041,6 +4133,7 @@ watch(
               >{{ screenshotInProgress ? "截图中..." : "截图" }}</button>
               <button
                 class="tool-btn"
+                data-guide="dashboard.quick-upload-txt"
                 title="上传TXT"
                 @click="openTxtUploadDialog"
               >上传TXT</button>
@@ -4075,7 +4168,7 @@ watch(
       <!-- Auxiliary Section -->
       <div class="auxiliary-section">
         <!-- Module 1: System Control & Status (Moved from Control Section) -->
-        <div class="dashboard-card control-module" style="flex: 0 0 auto">
+        <div class="dashboard-card control-module" data-guide="dashboard.control" style="flex: 0 0 auto">
           <div class="module-header">
             <h4>系统控制</h4>
             <div class="status-indicator">
@@ -4129,7 +4222,7 @@ watch(
         </div>
 
         <!-- Module 2: Category Filter (Tree) (Moved from Control Section) -->
-        <div class="dashboard-card filter-module" style="flex: 0 0 auto">
+        <div class="dashboard-card filter-module" data-guide="dashboard.filter" style="flex: 0 0 auto">
           <div class="module-header">
             <h4>目标类别筛选</h4>
           </div>
@@ -4175,6 +4268,7 @@ watch(
         <!-- Log Module Moved to Auxiliary Section -->
         <div
           class="dashboard-card log-module-mini"
+          data-guide="dashboard.logs"
           style="flex: 1 1 0; min-height: 0"
         >
           <div class="module-header">
@@ -4197,7 +4291,7 @@ watch(
       </div>
     </div>
 
-    <div class="panel result-card dashboard-wide-section">
+    <div class="panel result-card dashboard-wide-section" data-guide="dashboard.result">
       <div class="section-title">
         <h3>实时检测结果</h3>
         <span class="pill">{{ filteredRealtimeDetections.length }} 条</span>

@@ -4,6 +4,12 @@ import App from "./App.vue";
 import { createRouter, createWebHistory } from "vue-router";
 import { createPinia, setActivePinia } from "pinia";
 
+vi.mock("./utils/auth", () => ({
+  fetchAuthSession: vi.fn(async () => null),
+  getAuthSession: vi.fn(() => null),
+  logoutFromBackend: vi.fn(async () => {}),
+}));
+
 // Mock ResizeObserver
 global.ResizeObserver = class ResizeObserver {
   observe() {}

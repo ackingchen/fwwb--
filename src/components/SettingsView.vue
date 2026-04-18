@@ -298,7 +298,7 @@ onUnmounted(() => {
     <!-- Sidebar Navigation -->
     <aside class="settings-sidebar">
       <div class="sidebar-title">设置中心</div>
-      <nav class="settings-nav">
+      <nav class="settings-nav" data-guide="settings.nav">
         <button
           v-for="tab in tabs"
           :key="tab.key"
@@ -398,7 +398,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" data-guide="settings.backend-api">
           <div class="panel-header">
             <h3>后端 API 地址</h3>
             <transition name="fade">

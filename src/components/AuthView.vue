@@ -2,11 +2,9 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  createLocalAccount,
-  getStoredAccounts,
-  hasAuthSession,
-  setAuthSession,
-  validateAccountLogin,
+  fetchAuthSession,
+  loginWithBackend,
+  registerWithBackend,
 } from "../utils/auth";
 
 const router = useRouter();
@@ -16,15 +14,14 @@ const activeTab = ref("login");
 const submitting = ref(false);
 const noticeText = ref("");
 const noticeType = ref("info");
-const accountCount = ref(0);
 
 const loginForm = reactive({
-  username: "",
+  account: "",
   password: "",
 });
 
 const registerForm = reactive({
-  username: "",
+  account: "",
   password: "",
   confirmPassword: "",
 });
@@ -91,10 +88,6 @@ function setNotice(message, type = "info") {
   noticeType.value = type;
 }
 
-function refreshAccountCount() {
-  accountCount.value = getStoredAccounts().length;
-}
-
 function switchTab(tab) {
   if (activeTab.value === tab) return;
   activeTab.value = tab;
@@ -110,17 +103,16 @@ async function submitLogin() {
   submitting.value = true;
   setNotice("");
 
-  const result = validateAccountLogin(loginForm);
-  if (!result.ok) {
-    setNotice(result.message, "error");
+  try {
+    const result = await loginWithBackend(loginForm);
+    const displayName = result?.user?.displayName || result?.user?.username || "用户";
+    setNotice(`登录成功，欢迎 ${displayName}`, "success");
+    await jumpToSystem();
+  } catch (error) {
+    setNotice(error?.message || "登录失败，请稍后重试", "error");
+  } finally {
     submitting.value = false;
-    return;
   }
-
-  setAuthSession(result.account.username);
-  setNotice(`登录成功，欢迎 ${result.account.username}`, "success");
-  submitting.value = false;
-  await jumpToSystem();
 }
 
 async function submitRegister() {
@@ -128,33 +120,36 @@ async function submitRegister() {
   submitting.value = true;
   setNotice("");
 
+  if (!registerForm.account.trim()) {
+    setNotice("请输入账号", "error");
+    submitting.value = false;
+    return;
+  }
+
   if (registerForm.password !== registerForm.confirmPassword) {
     setNotice("两次输入的密码不一致", "error");
     submitting.value = false;
     return;
   }
 
-  const result = createLocalAccount({
-    username: registerForm.username,
-    password: registerForm.password,
-  });
-
-  if (!result.ok) {
-    setNotice(result.message, "error");
+  try {
+    await registerWithBackend({
+      account: registerForm.account,
+      password: registerForm.password,
+    });
+    setNotice("注册成功，请使用账号和密码登录", "success");
+    loginForm.account = registerForm.account.trim();
+    activeTab.value = "login";
+  } catch (error) {
+    setNotice(error?.message || "注册失败，请稍后重试", "error");
+  } finally {
     submitting.value = false;
-    return;
   }
-
-  refreshAccountCount();
-  setAuthSession(result.account.username);
-  setNotice(`注册成功，已自动登录为 ${result.account.username}`, "success");
-  submitting.value = false;
-  await jumpToSystem();
 }
 
 onMounted(async () => {
-  refreshAccountCount();
-  if (hasAuthSession()) {
+  const existingSession = await fetchAuthSession();
+  if (existingSession) {
     await jumpToSystem();
   }
 });
@@ -169,8 +164,8 @@ onMounted(async () => {
         <p class="hero-tag reveal" style="--delay: 50ms">PROJECT OVERVIEW</p>
         <h1 class="reveal" style="--delay: 110ms">无人机目标检测系统</h1>
         <p class="hero-subtitle reveal" style="--delay: 170ms">
-          本项目围绕低空巡检与目标识别业务构建，提供从多源输入、在线识别、态势展示到任务沉淀的完整前端工作台，
-          适用于系统演示、联调验证与教学训练场景。
+          本项目围绕低空巡检与目标识别业务构建，提供从多源输入、在线识别、态势展示到任务沉淀的完整全栈工作台，
+          适用于目标筛选，任务执行，低空监测。
         </p>
 
         <div class="hero-metrics">
@@ -214,15 +209,11 @@ onMounted(async () => {
           </div>
         </div>
 
-        <p class="hero-note reveal" style="--delay: 860ms">
-          说明：当前登录与数据持久化默认使用本地浏览器存储，便于快速体验与离线演示。
-        </p>
       </section>
 
       <section class="auth-card">
         <header class="auth-card-header">
           <h2>{{ cardTitle }}</h2>
-          <span>本地账号 {{ accountCount }} 个</span>
         </header>
 
         <div class="auth-tabs">
@@ -248,12 +239,12 @@ onMounted(async () => {
           @submit.prevent="submitLogin"
         >
           <label class="field">
-            <span>用户名</span>
+            <span>账号</span>
             <input
-              v-model.trim="loginForm.username"
+              v-model.trim="loginForm.account"
               type="text"
-              autocomplete="username"
-              placeholder="请输入用户名"
+              autocomplete="username email"
+              placeholder="请输入账号"
             />
           </label>
           <label class="field">
@@ -272,12 +263,12 @@ onMounted(async () => {
 
         <form v-else class="auth-form" @submit.prevent="submitRegister">
           <label class="field">
-            <span>用户名</span>
+            <span>账号</span>
             <input
-              v-model.trim="registerForm.username"
+              v-model.trim="registerForm.account"
               type="text"
               autocomplete="username"
-              placeholder="至少 3 个字符"
+              placeholder="请输入账号"
             />
           </label>
           <label class="field">
@@ -299,7 +290,7 @@ onMounted(async () => {
             />
           </label>
           <button class="submit-btn" type="submit" :disabled="submitting">
-            {{ submitting ? "注册中..." : "注册并自动登录" }}
+            {{ submitting ? "注册中..." : "完成注册" }}
           </button>
         </form>
 
