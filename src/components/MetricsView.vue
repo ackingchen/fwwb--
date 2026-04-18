@@ -17,7 +17,7 @@ import * as echarts from "echarts";
 const dataStore = useDataStore();
 const configStore = useConfigStore();
 const { summary, series } = storeToRefs(dataStore);
-const { httpBase } = storeToRefs(configStore);
+const { httpBase, theme } = storeToRefs(configStore);
 
 // 后端数据加载状态
 const loading = ref(false);
@@ -32,6 +32,14 @@ const chartPalette = [
   "#ff7b7b",
   "#a56af5",
 ];
+
+const getCssVarColor = (name, fallback) => {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return value || fallback;
+};
 
 const fmt = (v, suffix = '') => v === undefined ? '--' : `${v}${suffix}`;
 
@@ -462,20 +470,22 @@ const buildChartOptions = () => {
   const fpsTrend = localSeries.value.fpsTrend;
   const latencyTrend = localSeries.value.latencyTrend;
   const hourlyQuality = pagedHourly.value;
+  const chartTextColor = getCssVarColor("--text", "#eef5ff");
+  const chartMutedColor = getCssVarColor("--muted", "#9cb6db");
 
   const classPieOption = {
     color: chartPalette,
     tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
     legend: {
       bottom: 0,
-      textStyle: { color: "#9cb6db" },
+      textStyle: { color: chartMutedColor },
     },
     series: [
       {
         type: "pie",
         radius: ["40%", "70%"],
         center: ["50%", "45%"],
-        label: { color: "#eef5ff", formatter: "{b}\n{d}%" },
+        label: { color: chartTextColor, formatter: "{b}\n{d}%" },
         data: classes.map((item) => ({ name: item.name, value: item.value })),
       },
     ],
@@ -484,12 +494,12 @@ const buildChartOptions = () => {
   const sceneFunnelOption = {
     color: chartPalette,
     tooltip: { trigger: "item", formatter: "{b}: {c}%" },
-    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    legend: { top: 8, textStyle: { color: chartMutedColor } },
     series: [
       {
         type: "funnel",
         sort: "descending",
-        label: { color: "#eef5ff" },
+        label: { color: chartTextColor },
         data: scenes.map((item) => ({
           name: item.scene,
           value: item.map50,
@@ -506,14 +516,14 @@ const buildChartOptions = () => {
       name: "Recall",
       min: 0,
       max: 1,
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     yAxis: {
       type: "value",
       name: "Precision",
       min: 0,
       max: 1,
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     series: [
       {
@@ -528,15 +538,15 @@ const buildChartOptions = () => {
   const iouLineOption = {
     color: ["#4f95ff", "#61d9e8", "#f6cf68"],
     tooltip: { trigger: "axis" },
-    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    legend: { top: 8, textStyle: { color: chartMutedColor } },
     xAxis: {
       type: "category",
       data: iouMetrics.map((item) => item.iou),
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     yAxis: {
       type: "value",
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     series: [
       {
@@ -563,15 +573,15 @@ const buildChartOptions = () => {
   const confidenceLineOption = {
     color: ["#41d98f", "#ff7b7b", "#f6cf68"],
     tooltip: { trigger: "axis" },
-    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    legend: { top: 8, textStyle: { color: chartMutedColor } },
     xAxis: {
       type: "category",
       data: confidenceBands.map((item) => item.threshold),
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     yAxis: {
       type: "value",
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     series: [
       {
@@ -598,22 +608,22 @@ const buildChartOptions = () => {
   const performanceLineOption = {
     color: ["#61d9e8", "#f6cf68"],
     tooltip: { trigger: "axis" },
-    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    legend: { top: 8, textStyle: { color: chartMutedColor } },
     xAxis: {
       type: "category",
       data: fpsTrend.map((_, index) => `T${index + 1}`),
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     yAxis: [
       {
         type: "value",
         name: "FPS",
-        axisLabel: { color: "#9cb6db" },
+        axisLabel: { color: chartMutedColor },
       },
       {
         type: "value",
         name: "Latency",
-        axisLabel: { color: "#9cb6db" },
+        axisLabel: { color: chartMutedColor },
       },
     ],
     series: [
@@ -636,21 +646,26 @@ const buildChartOptions = () => {
   const hourlyBarOption = {
     color: ["#4f95ff", "#ff7b7b", "#41d98f"],
     tooltip: { trigger: "axis" },
-    legend: { top: 8, textStyle: { color: "#9cb6db" } },
+    legend: { top: 8, textStyle: { color: chartMutedColor } },
     xAxis: {
       type: "category",
       data: hourlyQuality.map((item) => item.period),
-      axisLabel: { color: "#9cb6db", rotate: 30 },
+      axisLabel: { color: chartMutedColor, rotate: 30 },
     },
     yAxis: {
       type: "value",
-      axisLabel: { color: "#9cb6db" },
+      axisLabel: { color: chartMutedColor },
     },
     series: [
       {
         name: "检测目标",
         type: "bar",
-        label: { show: true, position: "top", color: "#9cb6db", fontSize: 10 },
+        label: {
+          show: true,
+          position: "top",
+          color: chartMutedColor,
+          fontSize: 10,
+        },
         data: hourlyQuality.map((item) => item.targets),
       },
       {
@@ -728,6 +743,12 @@ watch(
 );
 
 watch([refreshKey, pageIndex], updateCharts);
+
+watch(theme, async () => {
+  await nextTick();
+  updateCharts();
+  resizeCharts();
+});
 </script>
 
 <template>

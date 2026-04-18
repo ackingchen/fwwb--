@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { useConfigStore } from "../stores/useConfigStore";
 import { useDataStore } from "../stores/useDataStore";
 import { storeToRefs } from "pinia";
@@ -19,6 +19,7 @@ const dataStore = useDataStore();
 const { confidence, iou, selectedModel, enabledLabels, backendIp, httpBase, wsBase, selectedTaskId } =
   storeToRefs(configStore);
 const {
+  detections: globalDetections,
   filteredDetections: detections,
   summary,
   activeTask: task,
@@ -55,6 +56,8 @@ const clearFrontendLogs = () => {
 
 // Quick create task dialog (same behavior as Tasks page new-task action)
 const DASHBOARD_TASK_SUMMARY_KEY = "dashboard_task_summary";
+const DASHBOARD_SESSION_KEY = "dashboard_view_session_v1";
+const DASHBOARD_SESSION_VERSION = 1;
 const latestTaskSummary = ref({
   taskName: "",
   taskType: "",
@@ -130,24 +133,42 @@ const dashboardTaskSummary = computed(() => {
 });
 
 const getStoredTaskSummaryForUpload = () => {
+  let taskName = "";
+  let taskType = "";
+  let scene = "";
+
   try {
     const raw = localStorage.getItem(DASHBOARD_TASK_SUMMARY_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
-        return {
-          taskName: String(parsed.taskName ?? "").trim(),
-          scene: String(parsed.scene ?? "").trim(),
-        };
+        taskName = String(parsed.taskName ?? "").trim();
+        taskType = normalizeTaskTypeLabel(parsed.taskType);
+        scene = String(parsed.scene ?? "").trim();
       }
     }
   } catch {
     // Ignore storage read failures
   }
 
+  if (!taskName) taskName = String(latestTaskSummary.value.taskName ?? "").trim();
+  if (!taskType) taskType = normalizeTaskTypeLabel(latestTaskSummary.value.taskType);
+  if (!scene) scene = String(latestTaskSummary.value.scene ?? "").trim();
+
+  // Fallback to active task fields if quick-task summary has not been created yet.
+  if (!taskName) taskName = String(task.value?.taskName ?? task.value?.name ?? "").trim();
+  if (!taskType)
+    taskType = normalizeTaskTypeLabel(task.value?.taskType ?? task.value?.taskTypeLabel);
+  if (!scene) scene = String(task.value?.scene ?? task.value?.scence ?? "").trim();
+
+  // Last-resort fallback to current draft values in quick-create dialog.
+  if (!taskName) taskName = String(quickTaskName.value ?? "").trim();
+  if (!scene) scene = String(quickTaskScene.value ?? "").trim();
+
   return {
-    taskName: String(latestTaskSummary.value.taskName ?? "").trim(),
-    scene: String(latestTaskSummary.value.scene ?? "").trim(),
+    taskName,
+    taskType,
+    scene,
   };
 };
 
@@ -214,6 +235,31 @@ const modeLabelMap = {
   video: "本地视频",
   image: "本地图片",
 };
+const MODE_TASK_TYPE_CODE = {
+  image: 0,
+  video: 1,
+  stream: 2,
+};
+
+const resolveWsTaskPayload = (mode) => {
+  const summary = getStoredTaskSummaryForUpload();
+  const taskTypeCode = MODE_TASK_TYPE_CODE[mode] ?? -1;
+  const fallbackTaskName =
+    mode === "stream"
+        ? "实时流检测任务"
+        : mode === "video"
+          ? "视频检测任务"
+        : "图片检测任务";
+
+  return {
+    taskName: summary.taskName || fallbackTaskName || "检测任务",
+    taskType: taskTypeCode,
+    taskTypeLabel: summary.taskType || normalizeTaskTypeLabel(taskTypeCode),
+    scene: summary.scene || "默认场景",
+    scence: summary.scene || "默认场景",
+  };
+};
+
 const screenshotInProgress = ref(false);
 
 const DETECTION_CATEGORY_OPTIONS = [
@@ -404,7 +450,7 @@ const normalizeDetectionLabel = (item, index) => {
 
   const classId = item?.classId ?? item?.class_id ?? item?.cls ?? item?.labelId;
   if (classId !== undefined && classId !== null && String(classId).trim()) {
-    return `类别 ${String(classId).trim()}`;
+  return `类别 ${String(classId).trim()}`;
   }
 
   return `目标${index + 1}`;
@@ -474,8 +520,130 @@ const filteredRealtimeDetections = computed(() =>
 );
 let detectionTimer = null;
 let detectionFailCount = 0;
-const MAX_FAIL = 3; // 连续失败3次后停止轮询
+const MAX_FAIL = 3; // 连续失败 3 次后停止轮询
 const detectionLoaded = ref(false);
+const STORE_DETECTION_SYNC_LIMIT = 200;
+const REALTIME_TABLE_MAX_ROWS = 50;
+const REALTIME_TABLE_REFRESH_INTERVAL_MS = 450;
+let detectionSyncTimer = null;
+let pendingDetectionSync = null;
+let realtimeTableFlushTimer = null;
+let pendingRealtimeRows = [];
+
+const normalizeDetectionsForStore = (
+  list,
+  { idPrefix = "LIVE", timestampFallback = getLogTime() } = {},
+) =>
+  normalizeRealtimeDetectionRows(list, { idPrefix, timestampFallback }).map((item) => ({
+    ...item,
+    score: Number.isFinite(Number(item?.score))
+      ? Number(item.score)
+      : Number.isFinite(Number(item?.confidence))
+        ? Number(item.confidence)
+        : 0,
+  }));
+
+const commitDetectionsToStore = (
+  list,
+  { idPrefix = "LIVE", timestampFallback = getLogTime() } = {},
+) => {
+  globalDetections.value = normalizeDetectionsForStore(list, {
+    idPrefix,
+    timestampFallback,
+  }).slice(0, STORE_DETECTION_SYNC_LIMIT);
+};
+
+const scheduleDetectionsToStore = (
+  list,
+  { idPrefix = "LIVE", timestampFallback = getLogTime() } = {},
+) => {
+  pendingDetectionSync = {
+    list: Array.isArray(list) ? [...list] : [],
+    idPrefix,
+    timestampFallback,
+  };
+  if (detectionSyncTimer) return;
+  detectionSyncTimer = setTimeout(() => {
+    const payload = pendingDetectionSync;
+    pendingDetectionSync = null;
+    detectionSyncTimer = null;
+    if (!payload) return;
+    commitDetectionsToStore(payload.list, {
+      idPrefix: payload.idPrefix,
+      timestampFallback: payload.timestampFallback,
+    });
+  }, 200);
+};
+
+const mergeRealtimeRows = (
+  incomingRows,
+  { maxSize = REALTIME_TABLE_MAX_ROWS, currentRows = realtimeDetections.value } = {},
+) => {
+  const merged = [...incomingRows, ...currentRows];
+  const deduped = [];
+  const seen = new Set();
+
+  for (const item of merged) {
+    const key = String(item?.id ?? item?.detectionId ?? "").trim();
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    deduped.push(item);
+    if (deduped.length >= maxSize) break;
+  }
+
+  return deduped.slice(0, maxSize);
+};
+
+const flushRealtimeDetections = ({
+  maxSize = REALTIME_TABLE_MAX_ROWS,
+} = {}) => {
+  if (!pendingRealtimeRows.length) return;
+  realtimeDetections.value = mergeRealtimeRows(pendingRealtimeRows, {
+    maxSize,
+  });
+  pendingRealtimeRows = [];
+};
+
+const scheduleRealtimeDetectionsFlush = () => {
+  if (realtimeTableFlushTimer) return;
+  realtimeTableFlushTimer = setTimeout(() => {
+    realtimeTableFlushTimer = null;
+    flushRealtimeDetections();
+  }, REALTIME_TABLE_REFRESH_INTERVAL_MS);
+};
+
+const clearPendingRealtimeDetections = () => {
+  pendingRealtimeRows = [];
+  if (realtimeTableFlushTimer) {
+    clearTimeout(realtimeTableFlushTimer);
+    realtimeTableFlushTimer = null;
+  }
+};
+
+const appendRealtimeDetections = (
+  list,
+  {
+    idPrefix = "LIVE",
+    timestampFallback = getLogTime(),
+    maxSize = REALTIME_TABLE_MAX_ROWS,
+  } = {},
+) => {
+  const normalizedRows = normalizeRealtimeDetectionRows(list, {
+    idPrefix,
+    timestampFallback,
+  });
+  if (!normalizedRows.length) return 0;
+
+  detectionLoaded.value = true;
+  pendingRealtimeRows = [...normalizedRows, ...pendingRealtimeRows].slice(
+    0,
+    maxSize * 4,
+  );
+  scheduleRealtimeDetectionsFlush();
+  return normalizedRows.length;
+};
 
 const fetchDetections = async () => {
   try {
@@ -486,24 +654,27 @@ const fetchDetections = async () => {
     });
     clearTimeout(timeout);
     if (!res.ok) return;
+
     const data = await res.json();
     if (Array.isArray(data)) {
       detectionLoaded.value = true;
     }
-    detectionFailCount = 0; // 请求成功，重置计数
+
+    detectionFailCount = 0;
     if (!Array.isArray(data) || data.length === 0) return;
-    const normalizedRows = normalizeRealtimeDetectionRows(data, {
+
+    const appendedCount = appendRealtimeDetections(data, {
       idPrefix: "LIVE",
       timestampFallback: getLogTime(),
     });
-    if (!normalizedRows.length) return;
-    // 过滤已有数据，只添加新的
-    const newItems = normalizedRows.filter((d) => {
-      const id = d.id || d.detectionId;
-      return !realtimeDetections.value.some((e) => (e.id || e.detectionId) === id);
-    });
-    if (newItems.length > 0) {
-      realtimeDetections.value = [...newItems, ...realtimeDetections.value].slice(0, 50);
+    if (appendedCount > 0) {
+      const rowsForStore = mergeRealtimeRows(pendingRealtimeRows, {
+        maxSize: REALTIME_TABLE_MAX_ROWS,
+      });
+      scheduleDetectionsToStore(rowsForStore, {
+        idPrefix: "LIVE",
+        timestampFallback: getLogTime(),
+      });
     }
   } catch {
     detectionFailCount++;
@@ -625,6 +796,7 @@ const streamConnected = ref(false);
 const streamBase64 = ref("");
 const streamImg = ref(null);
 let streamWs = null;
+let streamSnapshotInterval = null;
 
 // Mode: Video
 const videoFile = ref(null);
@@ -633,6 +805,7 @@ const videoConnected = ref(false);
 const localVideo = ref(null);
 let videoWs = null;
 let videoSyncInterval = null;
+let videoSnapshotInterval = null;
 let videoBuffer = [];
 let videoAnimationId = null;
 
@@ -651,6 +824,9 @@ const imageDetecting = ref(false);
 const localImg = ref(null);
 const imageSourceWidth = ref(null);
 const imageSourceHeight = ref(null);
+const imageSessionDataUrl = ref("");
+const imageSessionFileName = ref("");
+const imageSessionFileType = ref("");
 
 // 固定标注文件内容，前端自动生成同名 txt 上传
 const LABEL_CONTENT = `3 0.120833 0.575843 0.039286 0.098315
@@ -737,8 +913,13 @@ const switchMode = (mode) => {
 
   activeMode.value = mode;
   mediaError.value = "";
+  clearPendingRealtimeDetections();
   clearCanvas();
   canvasDetections = [];
+  scheduleDetectionsToStore([], {
+    idPrefix: "MODE",
+    timestampFallback: getLogTime(),
+  });
   imageSourceWidth.value = null;
   imageSourceHeight.value = null;
   pushFrontendLog(`已切换到${modeLabelMap[mode] || mode}模式`, "info");
@@ -763,28 +944,37 @@ const drawDetections = (
   canvas.width = displayWidth;
   canvas.height = displayHeight;
   const ctx = canvas.getContext("2d");
+  if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  renderDetectionsOnContext(
+    ctx,
+    detectionsToDraw,
+    displayWidth,
+    displayHeight,
+    sourceWidth,
+    sourceHeight,
+  );
+};
+
+const renderDetectionsOnContext = (
+  ctx,
+  detectionsToDraw,
+  displayWidth,
+  displayHeight,
+  sourceWidth,
+  sourceHeight,
+) => {
+  if (!ctx) return;
   if (!detectionsToDraw || detectionsToDraw.length === 0) return;
 
-  const imageAspect = sourceWidth / sourceHeight;
-  const containerAspect = displayWidth / displayHeight;
-
-  let renderWidth, renderHeight, offsetX, offsetY;
-
-  if (imageAspect > containerAspect) {
-    // Image is wider than container, fits width
-    renderWidth = displayWidth;
-    renderHeight = displayWidth / imageAspect;
-    offsetX = 0;
-    offsetY = (displayHeight - renderHeight) / 2;
-  } else {
-    // Image is taller than container, fits height
-    renderHeight = displayHeight;
-    renderWidth = displayHeight * imageAspect;
-    offsetX = (displayWidth - renderWidth) / 2;
-    offsetY = 0;
-  }
+  const layout = getContainLayout(
+    displayWidth,
+    displayHeight,
+    sourceWidth,
+    sourceHeight,
+  );
+  const { renderWidth, renderHeight, offsetX, offsetY } = layout;
 
   const scaleX = renderWidth / sourceWidth;
   const scaleY = renderHeight / sourceHeight;
@@ -837,6 +1027,28 @@ const drawDetections = (
     ctx.fillStyle = "#000";
     ctx.fillText(label, lx + 5, ly - 6);
   });
+};
+
+const getActiveMediaSourceSize = () => {
+  if (activeMode.value === "stream" && streamImg.value?.complete) {
+    return {
+      width: Number(streamImg.value.naturalWidth) || 0,
+      height: Number(streamImg.value.naturalHeight) || 0,
+    };
+  }
+  if (activeMode.value === "video" && localVideo.value) {
+    return {
+      width: Number(localVideo.value.videoWidth) || 0,
+      height: Number(localVideo.value.videoHeight) || 0,
+    };
+  }
+  if (activeMode.value === "image" && localImg.value?.complete) {
+    return {
+      width: Number(localImg.value.naturalWidth) || 0,
+      height: Number(localImg.value.naturalHeight) || 0,
+    };
+  }
+  return { width: 0, height: 0 };
 };
 
 const getContainLayout = (
@@ -927,13 +1139,19 @@ const captureStageScreenshot = async () => {
 
     const overlayCanvas = detectCanvas.value;
     const stage = videoStageRef.value;
+    const stageRect = stage?.getBoundingClientRect?.();
+    const stageWidth =
+      Math.round(Number(stageRect?.width) || 0) || Number(stage?.clientWidth) || 0;
+    const stageHeight =
+      Math.round(Number(stageRect?.height) || 0) || Number(stage?.clientHeight) || 0;
+    const sourceSize = getActiveMediaSourceSize();
     const targetWidth = Math.max(
       1,
-      Number(overlayCanvas?.width) || Number(stage?.clientWidth) || 1280,
+      sourceSize.width || stageWidth || Number(overlayCanvas?.width) || 1280,
     );
     const targetHeight = Math.max(
       1,
-      Number(overlayCanvas?.height) || Number(stage?.clientHeight) || 720,
+      sourceSize.height || stageHeight || Number(overlayCanvas?.height) || 720,
     );
 
     const captureCanvas = document.createElement("canvas");
@@ -973,17 +1191,32 @@ const captureStageScreenshot = async () => {
       throw new Error("画面还未加载完成，请稍后重试");
     }
 
-    if (overlayCanvas && overlayCanvas.width > 0 && overlayCanvas.height > 0) {
+    const canRenderDetectionByData =
+      sourceSize.width > 0 &&
+      sourceSize.height > 0 &&
+      Array.isArray(canvasDetections) &&
+      canvasDetections.length > 0;
+
+    if (canRenderDetectionByData) {
+      renderDetectionsOnContext(
+        ctx,
+        canvasDetections,
+        targetWidth,
+        targetHeight,
+        sourceSize.width,
+        sourceSize.height,
+      );
+    } else if (overlayCanvas && overlayCanvas.width > 0 && overlayCanvas.height > 0) {
       ctx.drawImage(overlayCanvas, 0, 0, targetWidth, targetHeight);
     }
 
     const fileName = `doki-screenshot-${activeMode.value}-${getScreenshotTimestamp()}.png`;
     const dataUrl = captureCanvas.toDataURL("image/png");
     downloadDataUrl(dataUrl, fileName);
-    pushFrontendLog(`截图已保存：${fileName}`, "success");
+    pushFrontendLog(`截图已保存: ${fileName}`, "success");
   } catch (error) {
     const message = error?.message || "未知错误";
-    pushFrontendLog(`截图失败：${message}`, "error");
+    pushFrontendLog(`截图失败: ${message}`, "error");
     if (!mediaError.value) {
       mediaError.value = message;
     }
@@ -992,14 +1225,52 @@ const captureStageScreenshot = async () => {
   }
 };
 
+const WS_SNAPSHOT_INTERVAL_MS = 3000;
+
+const clearStreamSnapshotInterval = () => {
+  if (streamSnapshotInterval) {
+    clearInterval(streamSnapshotInterval);
+    streamSnapshotInterval = null;
+  }
+};
+
+const clearVideoSnapshotInterval = () => {
+  if (videoSnapshotInterval) {
+    clearInterval(videoSnapshotInterval);
+    videoSnapshotInterval = null;
+  }
+};
+
+const startStreamSnapshotInterval = () => {
+  clearStreamSnapshotInterval();
+  streamSnapshotInterval = setInterval(() => {
+    if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
+    streamWs.send(JSON.stringify({ command: "snapshot" }));
+  }, WS_SNAPSHOT_INTERVAL_MS);
+};
+
+const startVideoSnapshotInterval = () => {
+  clearVideoSnapshotInterval();
+  videoSnapshotInterval = setInterval(() => {
+    if (!videoWs || videoWs.readyState !== WebSocket.OPEN) return;
+    videoWs.send(JSON.stringify({ command: "SNAPSHOT" }));
+  }, WS_SNAPSHOT_INTERVAL_MS);
+};
+
 // --- Stream Functions ---
 const toggleStream = () => {
   mediaError.value = "";
   if (streamConnected.value) {
+    clearStreamSnapshotInterval();
     if (streamWs) streamWs.close();
     streamConnected.value = false;
     streamBase64.value = "";
+    clearPendingRealtimeDetections();
     clearCanvas();
+    scheduleDetectionsToStore([], {
+      idPrefix: "STREAM",
+      timestampFallback: getLogTime(),
+    });
     pushFrontendLog("已停止实时流检测", "info");
   } else {
     if (isOffline.value) {
@@ -1012,7 +1283,18 @@ const toggleStream = () => {
       streamWs.onopen = () => {
         streamConnected.value = true;
         mediaError.value = "";
-        streamWs.send(JSON.stringify({ url: streamRtspUrl.value }));
+        const taskPayload = resolveWsTaskPayload("stream");
+        streamWs.send(
+          JSON.stringify({
+            url: streamRtspUrl.value,
+            taskName: taskPayload.taskName,
+            taskType: taskPayload.taskType,
+            taskTypeLabel: taskPayload.taskTypeLabel,
+            scene: taskPayload.scene,
+            scence: taskPayload.scence,
+          }),
+        );
+        startStreamSnapshotInterval();
         pushFrontendLog("实时流连接成功", "success");
       };
       streamWs.onmessage = (event) => {
@@ -1020,15 +1302,26 @@ const toggleStream = () => {
         if (data.image) {
           streamBase64.value = "data:image/jpeg;base64," + data.image;
           canvasDetections = data.detections || [];
+          scheduleDetectionsToStore(canvasDetections, {
+            idPrefix: "STREAM",
+            timestampFallback: getLogTime(),
+          });
         }
       };
       streamWs.onerror = () => {
+        clearStreamSnapshotInterval();
         mediaError.value = "WebSocket 连接失败，请检查服务地址或网络状态";
         pushFrontendLog("实时流连接异常", "error");
       };
       streamWs.onclose = () => {
+        clearStreamSnapshotInterval();
         streamConnected.value = false;
         streamBase64.value = "";
+        clearPendingRealtimeDetections();
+        scheduleDetectionsToStore([], {
+          idPrefix: "STREAM",
+          timestampFallback: getLogTime(),
+        });
         pushFrontendLog("实时流连接已关闭", "info");
       };
     } catch (e) {
@@ -1076,7 +1369,7 @@ const onVideoFileChange = (e) => {
     videoUrl.value = URL.createObjectURL(file);
     videoBuffer = [];
     resetUploadState();
-    pushFrontendLog(`已选择视频文件：${file.name}`, "info");
+    pushFrontendLog(`已选择视频文件: ${file.name}`, "info");
   }
 };
 
@@ -1146,7 +1439,7 @@ const startVideoUpload = async () => {
   uploadState.value = "uploading";
   uploadProgress.value = 0; // Always start from 0 for single upload
   uploadCancelController = new AbortController();
-  pushFrontendLog(`开始上传视频：${videoFile.value.name}`, "info");
+  pushFrontendLog(`开始上传视频: ${videoFile.value.name}`, "info");
 
   const file = videoFile.value;
   let startTime = Date.now();
@@ -1210,10 +1503,10 @@ const startVideoUpload = async () => {
     } else {
       uploadState.value = "error";
       mediaError.value =
-        "上传失败，请重试：" +
+        "上传失败，请重试: " +
         (error.response?.data?.message || error.message || "未知错误");
       pushFrontendLog(
-        `视频上传失败：${error.response?.data?.message || error.message || "未知错误"}`,
+        `视频上传失败: ${error.response?.data?.message || error.message || "未知错误"}`,
         "error",
       );
     }
@@ -1223,9 +1516,15 @@ const startVideoUpload = async () => {
 const toggleVideoDetection = () => {
   mediaError.value = "";
   if (videoConnected.value) {
+    clearVideoSnapshotInterval();
     if (videoWs) videoWs.close();
     videoConnected.value = false;
+    clearPendingRealtimeDetections();
     clearCanvas();
+    scheduleDetectionsToStore([], {
+      idPrefix: "VIDEO",
+      timestampFallback: getLogTime(),
+    });
     if (videoSyncInterval) clearInterval(videoSyncInterval);
     if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
     pushFrontendLog("已停止视频检测", "info");
@@ -1248,12 +1547,19 @@ const toggleVideoDetection = () => {
     videoWs.onopen = () => {
       videoConnected.value = true;
       mediaError.value = "";
+      const taskPayload = resolveWsTaskPayload("video");
       videoWs.send(
         JSON.stringify({
           command: "START",
           videoPath: videoTaskId.value || videoFile.value.name,
+          taskName: taskPayload.taskName,
+          taskType: taskPayload.taskType,
+          taskTypeLabel: taskPayload.taskTypeLabel,
+          scene: taskPayload.scene,
+          scence: taskPayload.scence,
         }),
       );
+      startVideoSnapshotInterval();
       pushFrontendLog("视频检测通道连接成功", "success");
       // console.log(videoTaskId.value || videoFile.value.name);
       videoSyncInterval = setInterval(() => {
@@ -1278,22 +1584,33 @@ const toggleVideoDetection = () => {
 
     videoWs.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      if (data.detections) {
+      if (Array.isArray(data.detections) && data.detections.length > 0) {
         videoBuffer.push({
           ts: data.timestamp,
           data: data.detections,
         });
         if (videoBuffer.length > 150) videoBuffer.shift();
+        appendRealtimeDetections(data.detections, {
+          idPrefix: "VIDEO",
+          timestampFallback: getLogTime(),
+        });
       }
     };
 
     videoWs.onerror = () => {
+      clearVideoSnapshotInterval();
       mediaError.value = "视频检测服务连接失败，请检查后端状态";
       pushFrontendLog("视频检测通道异常", "error");
     };
 
     videoWs.onclose = () => {
+      clearVideoSnapshotInterval();
       videoConnected.value = false;
+      clearPendingRealtimeDetections();
+      scheduleDetectionsToStore([], {
+        idPrefix: "VIDEO",
+        timestampFallback: getLogTime(),
+      });
       if (videoSyncInterval) clearInterval(videoSyncInterval);
       if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
       pushFrontendLog("视频检测通道已关闭", "info");
@@ -1324,6 +1641,11 @@ const renderVideoLoop = () => {
     if (closestFrame && minDiff < 0.5) {
       const container = videoEl.parentElement;
       if (container) {
+        canvasDetections = closestFrame.data;
+        scheduleDetectionsToStore(closestFrame.data, {
+          idPrefix: "VIDEO",
+          timestampFallback: getLogTime(),
+        });
         drawDetections(
           closestFrame.data,
           container.clientWidth,
@@ -1359,17 +1681,50 @@ const onVideoSeeking = () => {
 };
 
 // --- Image Functions ---
+const readFileAsDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("read_image_failed"));
+    reader.readAsDataURL(file);
+  });
+
+const cacheImageFileForSession = async (file) => {
+  if (!file || !String(file.type || "").startsWith("image/")) return;
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    if (!dataUrl.startsWith("data:image/")) return;
+    imageSessionDataUrl.value = dataUrl;
+    imageSessionFileName.value = file.name || "image";
+    imageSessionFileType.value = file.type || "image/png";
+    if (imageFile.value === file) {
+      if (imageUrl.value && String(imageUrl.value).startsWith("blob:")) {
+        URL.revokeObjectURL(imageUrl.value);
+      }
+      imageUrl.value = dataUrl;
+    }
+  } catch {
+    // Ignore snapshot cache failures
+  }
+};
+
 const onImageFileChange = (e) => {
   const file = e.target.files[0];
   if (file) {
     imageFile.value = file;
-    if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
+    imageSessionDataUrl.value = "";
+    imageSessionFileName.value = file.name || "";
+    imageSessionFileType.value = file.type || "image/png";
+    if (imageUrl.value && String(imageUrl.value).startsWith("blob:")) {
+      URL.revokeObjectURL(imageUrl.value);
+    }
     imageUrl.value = URL.createObjectURL(file);
+    cacheImageFileForSession(file);
     clearCanvas();
     canvasDetections = [];
     imageSourceWidth.value = null;
     imageSourceHeight.value = null;
-    pushFrontendLog(`已选择图片文件：${file.name}`, "info");
+    pushFrontendLog(`已选择图片文件: ${file.name}`, "info");
   }
 };
 
@@ -1382,7 +1737,7 @@ const detectImage = async () => {
     return;
   }
   imageDetecting.value = true;
-  pushFrontendLog(`开始图片检测：${imageFile.value.name}`, "info");
+  pushFrontendLog(`开始图片检测: ${imageFile.value.name}`, "info");
   try {
     // 1. 先自动上传同名标注 txt 文件
     const imgBaseName = imageFile.value.name.replace(/\.[^.]+$/, "");
@@ -1403,10 +1758,11 @@ const detectImage = async () => {
 
     // 2. 再上传图片进行检测
     const formData = new FormData();
-    const uploadSummary = getStoredTaskSummaryForUpload();
+    const uploadSummary = resolveWsTaskPayload("image");
     formData.append("file", imageFile.value);
     formData.append("taskName", uploadSummary.taskName);
     formData.append("scene", uploadSummary.scene);
+    formData.append("taskType", String(uploadSummary.taskType));
 
     const response = await fetch(`${httpBase.value}/detections/image`, {
       method: "POST",
@@ -1422,8 +1778,13 @@ const detectImage = async () => {
     const payload = await response.json();
     const normalized = normalizeImageDetections(payload);
     canvasDetections = normalized.detections;
+    scheduleDetectionsToStore(normalized.detections, {
+      idPrefix: "IMG",
+      timestampFallback: getLogTime(),
+    });
     imageSourceWidth.value = normalized.sourceWidth;
     imageSourceHeight.value = normalized.sourceHeight;
+    clearPendingRealtimeDetections();
     realtimeDetections.value = normalizeRealtimeDetectionRows(normalized.detections, {
       idPrefix: "IMG",
       timestampFallback: getLogTime(),
@@ -1441,7 +1802,7 @@ const detectImage = async () => {
       error.message === "Failed to fetch"
         ? "网络请求失败，请检查服务状态"
         : error.message;
-    pushFrontendLog(`图片检测失败：${error.message || "未知错误"}`, "error");
+    pushFrontendLog(`图片检测失败: ${error.message || "未知错误"}`, "error");
   } finally {
     imageDetecting.value = false;
   }
@@ -1531,17 +1892,36 @@ const handleUnhandledRejection = (event) => {
   pushFrontendLog(message, "error");
 };
 
+const ensureMediaSourceAfterActivate = () => {
+  if (activeMode.value === "image" && !imageUrl.value) {
+    if (imageSessionDataUrl.value && imageSessionDataUrl.value.startsWith("data:image/")) {
+      imageUrl.value = imageSessionDataUrl.value;
+    } else if (imageFile.value instanceof File) {
+      imageUrl.value = URL.createObjectURL(imageFile.value);
+    }
+  }
+
+  if (activeMode.value === "video" && !videoUrl.value && videoFile.value instanceof File) {
+    videoUrl.value = URL.createObjectURL(videoFile.value);
+  }
+};
+
 onMounted(() => {
   pushFrontendLog("大屏页面已加载", "success");
   viewportWidth.value = window.innerWidth;
   loadTaskSummaryFromStorage();
+  restoreDashboardSessionState();
+  ensureMediaSourceAfterActivate();
+  setTimeout(() => redrawCanvasForCurrentMode(), 0);
   window.addEventListener("error", handleRuntimeError);
   window.addEventListener("unhandledrejection", handleUnhandledRejection);
+  window.addEventListener("beforeunload", handleBeforeUnload);
 });
 
 onActivated(() => {
   viewportWidth.value = window.innerWidth;
   loadTaskSummaryFromStorage();
+  ensureMediaSourceAfterActivate();
   window.addEventListener("resize", handleResize);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   setTimeout(() => handleResize(), 0);
@@ -1551,6 +1931,7 @@ onActivated(() => {
 });
 
 onDeactivated(() => {
+  persistDashboardSessionState();
   window.removeEventListener("resize", handleResize);
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   stopApiCheck();
@@ -1559,18 +1940,36 @@ onDeactivated(() => {
 });
 
 onUnmounted(() => {
+  persistDashboardSessionState();
+  clearStreamSnapshotInterval();
+  clearVideoSnapshotInterval();
   if (streamWs) streamWs.close();
   if (videoWs) videoWs.close();
   if (videoSyncInterval) clearInterval(videoSyncInterval);
   if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
-  if (videoUrl.value) URL.revokeObjectURL(videoUrl.value);
-  if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
+  if (videoUrl.value && String(videoUrl.value).startsWith("blob:")) {
+    URL.revokeObjectURL(videoUrl.value);
+  }
+  if (imageUrl.value && String(imageUrl.value).startsWith("blob:")) {
+    URL.revokeObjectURL(imageUrl.value);
+  }
+  if (dashboardSessionPersistTimer) {
+    clearTimeout(dashboardSessionPersistTimer);
+    dashboardSessionPersistTimer = null;
+  }
+  if (detectionSyncTimer) {
+    clearTimeout(detectionSyncTimer);
+    detectionSyncTimer = null;
+  }
+  pendingDetectionSync = null;
+  clearPendingRealtimeDetections();
   window.removeEventListener("resize", handleResize);
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   window.removeEventListener("online", handleOnline);
   window.removeEventListener("offline", handleOffline);
   window.removeEventListener("error", handleRuntimeError);
   window.removeEventListener("unhandledrejection", handleUnhandledRejection);
+  window.removeEventListener("beforeunload", handleBeforeUnload);
   stopApiCheck();
   stopDetectionPolling();
   stopResourcePolling();
@@ -1610,7 +2009,7 @@ const validateTime = () => {
 const categoryTree = [
   {
     key: "all",
-    label: "全部",
+    label: "鍏ㄩ儴",
     children: DETECTION_CATEGORY_OPTIONS,
   },
 ];
@@ -1629,10 +2028,10 @@ const isCategoryIndeterminate = computed(
     selectedCategoryCount.value < allCategoryKeys.length,
 );
 const categoryColorMap = {
-  "人员": "#ff7b7b",
-  "车辆": "#61d9e8",
-  "设施": "#f6cf68",
-  "动物": "#a56af5",
+  "浜哄憳": "#ff7b7b",
+  "杞﹁締": "#61d9e8",
+  "璁炬柦": "#f6cf68",
+  "鍔ㄧ墿": "#a56af5",
 };
 
 // --- Connection Status Logic ---
@@ -1843,6 +2242,284 @@ const setCategoryHover = (name) => {
     color: categoryColorMap[rawItem.name] || "#9cb6db",
   };
 };
+
+const dataUrlToFile = (dataUrl, name = "image.png", type = "image/png") => {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return null;
+  const parts = dataUrl.split(",");
+  if (parts.length < 2) return null;
+  const header = parts[0];
+  const base64 = parts[1];
+  const mimeMatch = header.match(/data:(.*?);base64/i);
+  const mime = type || (mimeMatch ? mimeMatch[1] : "image/png");
+  try {
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new File([bytes], name, { type: mime });
+  } catch {
+    return null;
+  }
+};
+
+const buildDashboardSessionState = () => ({
+  version: DASHBOARD_SESSION_VERSION,
+  savedAt: Date.now(),
+  ui: {
+    activeMode: activeMode.value,
+    mediaError: mediaError.value,
+    detectionLoaded: detectionLoaded.value,
+    quickTaskDialogVisible: quickTaskDialogVisible.value,
+    quickTaskName: quickTaskName.value,
+    quickTaskScene: quickTaskScene.value,
+    quickTaskSource: quickTaskSource.value,
+    activeCategoryNames: [...activeCategoryNames.value],
+    startTime: startTime.value,
+    endTime: endTime.value,
+  },
+  stream: {
+    streamWsAddr: streamWsAddr.value,
+    streamRtspUrl: streamRtspUrl.value,
+  },
+  filters: {
+    confidence: confidence.value,
+    iou: iou.value,
+    selectedModel: selectedModel.value,
+    enabledLabels: [...enabledLabels.value],
+  },
+  image: {
+    imageUrl: imageSessionDataUrl.value || String(imageUrl.value || ""),
+    imageFileName: imageSessionFileName.value || imageFile.value?.name || "",
+    imageFileType: imageSessionFileType.value || imageFile.value?.type || "image/png",
+    imageSourceWidth: imageSourceWidth.value,
+    imageSourceHeight: imageSourceHeight.value,
+  },
+  tables: {
+    realtimeDetections: [...realtimeDetections.value].slice(0, 50),
+    canvasDetections: [...canvasDetections].slice(0, 300),
+    frontendLogs: [...frontendLogs.value].slice(0, DASHBOARD_LOG_LIMIT),
+  },
+  task: {
+    selectedTaskId: selectedTaskId.value,
+    latestTaskSummary: { ...latestTaskSummary.value },
+  },
+});
+
+const persistDashboardSessionState = () => {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    const payload = buildDashboardSessionState();
+    sessionStorage.setItem(DASHBOARD_SESSION_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore session persistence failures
+  }
+};
+
+const restoreDashboardSessionState = () => {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    const raw = sessionStorage.getItem(DASHBOARD_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.version !== DASHBOARD_SESSION_VERSION) return;
+
+    const streamState = parsed.stream || {};
+    if (typeof streamState.streamWsAddr === "string") {
+      streamWsAddr.value = streamState.streamWsAddr;
+    }
+    if (typeof streamState.streamRtspUrl === "string") {
+      streamRtspUrl.value = streamState.streamRtspUrl;
+    }
+
+    const filterState = parsed.filters || {};
+    if (Number.isFinite(Number(filterState.confidence))) {
+      confidence.value = Number(filterState.confidence);
+    }
+    if (Number.isFinite(Number(filterState.iou))) {
+      iou.value = Number(filterState.iou);
+    }
+    if (typeof filterState.selectedModel === "string" && filterState.selectedModel.trim()) {
+      selectedModel.value = filterState.selectedModel;
+    }
+    if (Array.isArray(filterState.enabledLabels)) {
+      enabledLabels.value = filterState.enabledLabels.filter((label) =>
+        allCategoryKeys.includes(label),
+      );
+    }
+
+    const uiState = parsed.ui || {};
+    if (["stream", "video", "image"].includes(uiState.activeMode)) {
+      activeMode.value = uiState.activeMode;
+    }
+    if (typeof uiState.mediaError === "string") {
+      mediaError.value = uiState.mediaError;
+    }
+    if (typeof uiState.detectionLoaded === "boolean") {
+      detectionLoaded.value = uiState.detectionLoaded;
+    }
+    if (typeof uiState.quickTaskDialogVisible === "boolean") {
+      quickTaskDialogVisible.value = uiState.quickTaskDialogVisible;
+    }
+    if (typeof uiState.quickTaskName === "string") {
+      quickTaskName.value = uiState.quickTaskName;
+    }
+    if (typeof uiState.quickTaskScene === "string") {
+      quickTaskScene.value = uiState.quickTaskScene;
+    }
+    if (typeof uiState.quickTaskSource === "string") {
+      quickTaskSource.value = uiState.quickTaskSource;
+    }
+    if (typeof uiState.startTime === "string") {
+      startTime.value = uiState.startTime;
+    }
+    if (typeof uiState.endTime === "string") {
+      endTime.value = uiState.endTime;
+    }
+    if (Array.isArray(uiState.activeCategoryNames)) {
+      const restoredNames = uiState.activeCategoryNames.filter(
+        (name) => typeof name === "string" && name.trim(),
+      );
+      if (restoredNames.length) {
+        activeCategoryNames.value = restoredNames;
+      }
+    }
+    validateTime();
+
+    const imageState = parsed.image || {};
+    if (typeof imageState.imageUrl === "string" && imageState.imageUrl) {
+      const restoredImageUrl = imageState.imageUrl;
+      imageUrl.value = restoredImageUrl;
+      if (restoredImageUrl.startsWith("data:image/")) {
+        imageSessionDataUrl.value = restoredImageUrl;
+        imageSessionFileName.value = String(imageState.imageFileName || "image.png");
+        imageSessionFileType.value = String(imageState.imageFileType || "image/png");
+        const restoredFile = dataUrlToFile(
+          imageSessionDataUrl.value,
+          imageSessionFileName.value,
+          imageSessionFileType.value,
+        );
+        if (restoredFile) {
+          imageFile.value = restoredFile;
+        }
+      }
+    }
+    if (Number.isFinite(Number(imageState.imageSourceWidth))) {
+      imageSourceWidth.value = Number(imageState.imageSourceWidth);
+    }
+    if (Number.isFinite(Number(imageState.imageSourceHeight))) {
+      imageSourceHeight.value = Number(imageState.imageSourceHeight);
+    }
+
+    const tableState = parsed.tables || {};
+    if (Array.isArray(tableState.realtimeDetections)) {
+      realtimeDetections.value = tableState.realtimeDetections.slice(0, 50);
+    }
+    if (Array.isArray(tableState.canvasDetections)) {
+      canvasDetections = tableState.canvasDetections.slice(0, 300);
+    }
+    if (Array.isArray(tableState.frontendLogs)) {
+      frontendLogs.value = tableState.frontendLogs.slice(0, DASHBOARD_LOG_LIMIT);
+    }
+    if (!detectionLoaded.value && realtimeDetections.value.length > 0) {
+      detectionLoaded.value = true;
+    }
+    if (canvasDetections.length > 0) {
+      scheduleDetectionsToStore(canvasDetections, {
+        idPrefix: "SESSION",
+        timestampFallback: getLogTime(),
+      });
+    } else {
+      scheduleDetectionsToStore(realtimeDetections.value, {
+        idPrefix: "SESSION",
+        timestampFallback: getLogTime(),
+      });
+    }
+
+    const taskState = parsed.task || {};
+    if (typeof taskState.selectedTaskId === "string") {
+      selectedTaskId.value = taskState.selectedTaskId;
+    }
+    if (taskState.latestTaskSummary && typeof taskState.latestTaskSummary === "object") {
+      applyTaskSummary(taskState.latestTaskSummary);
+    }
+  } catch {
+    // Ignore session restore failures
+  }
+};
+
+let dashboardSessionPersistTimer = null;
+const schedulePersistDashboardSessionState = () => {
+  if (dashboardSessionPersistTimer) {
+    clearTimeout(dashboardSessionPersistTimer);
+  }
+  dashboardSessionPersistTimer = setTimeout(() => {
+    persistDashboardSessionState();
+    dashboardSessionPersistTimer = null;
+  }, 150);
+};
+
+const handleBeforeUnload = () => {
+  persistDashboardSessionState();
+};
+
+watch(
+  [
+    activeMode,
+    streamWsAddr,
+    streamRtspUrl,
+    mediaError,
+    quickTaskDialogVisible,
+    quickTaskName,
+    quickTaskScene,
+    quickTaskSource,
+    startTime,
+    endTime,
+    confidence,
+    iou,
+    selectedModel,
+    detectionLoaded,
+    imageUrl,
+    imageSourceWidth,
+    imageSourceHeight,
+    selectedTaskId,
+  ],
+  () => {
+    schedulePersistDashboardSessionState();
+  },
+);
+
+watch(
+  enabledLabels,
+  () => {
+    schedulePersistDashboardSessionState();
+  },
+  { deep: true },
+);
+
+watch(
+  activeCategoryNames,
+  () => {
+    schedulePersistDashboardSessionState();
+  },
+  { deep: true },
+);
+
+watch(
+  realtimeDetections,
+  () => {
+    schedulePersistDashboardSessionState();
+  },
+);
+
+watch(
+  frontendLogs,
+  () => {
+    schedulePersistDashboardSessionState();
+  },
+  { deep: true },
+);
 </script>
 
 <template>
@@ -2157,7 +2834,7 @@ const setCategoryHover = (name) => {
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">输入尺寸</span>
-                  <strong class="model-info-value">640×640</strong>
+                  <strong class="model-info-value">640x640</strong>
                 </div>
                 <div class="model-info-row">
                   <span class="model-info-label">精度模式</span>
@@ -2369,7 +3046,7 @@ const setCategoryHover = (name) => {
                 <input
                   v-model="streamWsAddr"
                   class="control-input"
-                  :placeholder="`WebSocket 地址 (如: ws://${backendIp}/...)`"
+                  placeholder="WebSocket 地址 (如: ws://127.0.0.1/stream-detect)"
                 />
                 <input
                   v-model="streamRtspUrl"
@@ -2682,7 +3359,7 @@ const setCategoryHover = (name) => {
         <span class="pill">{{ filteredRealtimeDetections.length }} 条</span>
       </div>
       <div class="detection-table-scroll">
-        <table>
+        <table class="realtime-detection-table">
           <thead>
             <tr>
               <th>时间戳</th>
@@ -2771,4 +3448,6 @@ const setCategoryHover = (name) => {
     </teleport>
   </div>
 </template>
+
+
 

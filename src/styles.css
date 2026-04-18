@@ -6,6 +6,7 @@
   --line: rgba(94, 149, 255, 0.2);
   --text: #eef5ff;
   --muted: #9cb6db;
+  --text-dim: #7f98bf;
   --primary: #4f95ff;
   --primary-strong: #2f7cff;
   --success: #41d98f;
@@ -29,7 +30,8 @@
   --bg-panel-2: #f7f9fc;
   --line: rgba(79, 100, 140, 0.15);
   --text: #1a2b42;
-  --muted: #6b7d95;
+  --muted: #51657f;
+  --text-dim: #5a6f8a;
   --primary: #3b7de0;
   --primary-strong: #2563c4;
   --success: #2db87a;
@@ -54,6 +56,10 @@ html,
 body,
 #app {
   min-height: 100%;
+}
+
+html {
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -410,6 +416,8 @@ label span,
 
 .dashboard-screen {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
   gap: 18px;
 }
 
@@ -417,6 +425,8 @@ label span,
 .hero-layout {
   display: grid;
   grid-template-columns: 1fr 520px 340px;
+  width: 100%;
+  min-width: 0;
   gap: 18px;
   align-items: stretch;
   min-height: calc(
@@ -2659,9 +2669,48 @@ input[type="range"] {
 
 /* 检测结果滚动表格 - 最多显示10条 */
 .detection-table-scroll {
+  height: 380px;
   max-height: 380px;
   overflow-y: auto;
   overflow-x: auto;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+
+.detection-table-scroll .realtime-detection-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.detection-table-scroll .realtime-detection-table th,
+.detection-table-scroll .realtime-detection-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detection-table-scroll .realtime-detection-table th:nth-child(1),
+.detection-table-scroll .realtime-detection-table td:nth-child(1) {
+  width: 18%;
+}
+
+.detection-table-scroll .realtime-detection-table th:nth-child(2),
+.detection-table-scroll .realtime-detection-table td:nth-child(2) {
+  width: 18%;
+}
+
+.detection-table-scroll .realtime-detection-table th:nth-child(3),
+.detection-table-scroll .realtime-detection-table td:nth-child(3) {
+  width: 18%;
+}
+
+.detection-table-scroll .realtime-detection-table th:nth-child(4),
+.detection-table-scroll .realtime-detection-table td:nth-child(4) {
+  width: 14%;
+}
+
+.detection-table-scroll .realtime-detection-table th:nth-child(5),
+.detection-table-scroll .realtime-detection-table td:nth-child(5) {
+  width: 32%;
 }
 
 .detection-table-scroll::-webkit-scrollbar {
@@ -2685,7 +2734,22 @@ input[type="range"] {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--card);
+  background: rgba(15, 41, 78, 0.98);
+}
+
+.detection-table-scroll thead tr,
+.detection-table-scroll thead th {
+  background: rgba(15, 41, 78, 0.98);
+}
+
+.detection-table-scroll thead th {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="light"] .detection-table-scroll thead,
+[data-theme="light"] .detection-table-scroll thead tr,
+[data-theme="light"] .detection-table-scroll thead th {
+  background: rgba(233, 240, 250, 0.98);
 }
 
 /* Ensure table fills width */
@@ -3261,6 +3325,7 @@ label {
   }
 
   .detection-table-scroll {
+    height: 300px;
     max-height: 300px;
   }
 }
@@ -3442,40 +3507,6 @@ label {
 
 .dashboard-screen.mobile-layout .video-info-tag {
   display: none;
-}
-
-/* Final dashboard layout normalization (align with metrics/tasks responsive strategy) */
-.dashboard-screen .hero-layout {
-  grid-template-columns: minmax(0, 1.55fr) minmax(360px, 1.05fr) minmax(300px, 0.95fr);
-  align-items: stretch;
-  min-height: auto;
-}
-
-.dashboard-screen .video-stage.board-style {
-  min-height: clamp(240px, 46vh, 560px);
-}
-
-@media (max-width: 1600px) {
-  .dashboard-screen .hero-layout {
-    grid-template-columns: minmax(0, 1.35fr) minmax(340px, 1fr) minmax(280px, 0.9fr);
-  }
-}
-
-@media (max-width: 1200px) {
-  .dashboard-screen .hero-layout {
-    grid-template-columns: 1fr !important;
-    min-height: auto;
-  }
-
-  .dashboard-screen .video-stage.board-style {
-    min-height: clamp(200px, 42vh, 420px);
-  }
-
-  .dashboard-screen .control-grid,
-  .dashboard-screen .video-lower-grid,
-  .dashboard-screen .stats-top {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ========== Light Theme Overrides ========== */

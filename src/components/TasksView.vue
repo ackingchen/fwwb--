@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, onActivated, onDeactivated, onUnmounted, watch } from 'vue';
 import { useDataStore } from '../stores/useDataStore';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -168,10 +168,15 @@ function normalizeTaskRecord(item = {}, index = 0, fallback = null) {
   );
   const sourceCandidate =
     item?.source ??
+    item?.videoPath ??
+    item?.video_path ??
     item?.streamUrl ??
+    item?.stream_url ??
     item?.inputSource ??
     item?.input ??
     item?.pictureName ??
+    fallback?.videoPath ??
+    fallback?.video_path ??
     fallback?.pictureName ??
     fallback?.source ??
     '--';
@@ -184,7 +189,14 @@ function normalizeTaskRecord(item = {}, index = 0, fallback = null) {
     fallback?.source ?? fallback?.streamUrl,
   );
   const taskTimeRaw =
-    item?.taskTime ?? item?.task_time ?? item?.runTime ?? fallback?.taskTime;
+    item?.taskTime ??
+    item?.task_time ??
+    item?.runTime ??
+    item?.createTime ??
+    item?.createdAt ??
+    item?.created_at ??
+    fallback?.taskTime ??
+    fallback?.createdAt;
   const createdRaw = item?.createTime ?? item?.createdAt ?? item?.created_at;
   const taskTime =
     taskTimeRaw !== undefined &&
@@ -250,6 +262,54 @@ function normalizeTaskRecord(item = {}, index = 0, fallback = null) {
     fallback?.afterImage ??
     fallback?.afterImageUrl;
 
+  const beforeImageCollection =
+    item?.beforeImages ??
+    item?.beforeImageList ??
+    item?.originalImageUrls ??
+    item?.original_image_urls ??
+    item?.originalImages ??
+    item?.beforeFrames ??
+    item?.beforeFrameList ??
+    item?.sourceFrames ??
+    item?.inputFrames ??
+    item?.originalFrames ??
+    item?.previewFrames ??
+    fallback?.beforeImages ??
+    fallback?.beforeImageList ??
+    fallback?.originalImageUrls ??
+    fallback?.original_image_urls ??
+    fallback?.originalImages ??
+    fallback?.beforeFrames ??
+    fallback?.beforeFrameList ??
+    fallback?.sourceFrames ??
+    fallback?.inputFrames ??
+    fallback?.originalFrames ??
+    fallback?.previewFrames;
+
+  const afterImageCollection =
+    item?.afterImages ??
+    item?.afterImageList ??
+    item?.detectedImageUrls ??
+    item?.detected_image_urls ??
+    item?.detectedImages ??
+    item?.afterFrames ??
+    item?.afterFrameList ??
+    item?.resultFrames ??
+    item?.detectedFrames ??
+    item?.outputFrames ??
+    item?.renderFrames ??
+    fallback?.afterImages ??
+    fallback?.afterImageList ??
+    fallback?.detectedImageUrls ??
+    fallback?.detected_image_urls ??
+    fallback?.detectedImages ??
+    fallback?.afterFrames ??
+    fallback?.afterFrameList ??
+    fallback?.resultFrames ??
+    fallback?.detectedFrames ??
+    fallback?.outputFrames ??
+    fallback?.renderFrames;
+
   return {
     ...(fallback ?? {}),
     id: taskId,
@@ -265,11 +325,20 @@ function normalizeTaskRecord(item = {}, index = 0, fallback = null) {
     taskTypeLabel:
       TASK_TYPE_LABELS[taskType] ??
       (taskType === 0 ? '图片' : taskType === 1 ? '视频' : taskType === 2 ? '实时流' : fallback?.taskTypeLabel ?? '--'),
-    scene: item?.scene ?? item?.sceneName ?? item?.scenario ?? fallback?.scene ?? '--',
+    scene: item?.scene ?? item?.scence ?? item?.sceneName ?? item?.scenario ?? fallback?.scene ?? '--',
     source: sourceRaw || '--',
-    streamUrl: item?.streamUrl ?? fallback?.streamUrl,
+    videoPath: item?.videoPath ?? item?.video_path ?? fallback?.videoPath ?? fallback?.video_path,
+    streamUrl: item?.streamUrl ?? item?.stream_url ?? fallback?.streamUrl ?? fallback?.stream_url,
     beforeImage: normalizeTextValue(beforeImageCandidate),
     afterImage: normalizeTextValue(afterImageCandidate),
+    beforeImages: beforeImageCollection,
+    originalImageUrls: beforeImageCollection,
+    beforeImageList: beforeImageCollection,
+    beforeFrames: beforeImageCollection,
+    afterImages: afterImageCollection,
+    detectedImageUrls: afterImageCollection,
+    afterImageList: afterImageCollection,
+    afterFrames: afterImageCollection,
     pictureName: item?.pictureName ?? fallback?.pictureName,
     width: item?.width ?? fallback?.width,
     height: item?.height ?? fallback?.height,
@@ -277,7 +346,7 @@ function normalizeTaskRecord(item = {}, index = 0, fallback = null) {
     taskTime,
     createdAt,
     targetCount: Number(targetRaw) || 0,
-    status: normalizeTaskStatus(statusRaw),
+    status: 'finished',
     detectionMetrics,
     metricsPrecision: detectionMetrics?.precision ?? fallback?.metricsPrecision,
     metricsRecall: detectionMetrics?.recall ?? fallback?.metricsRecall,
@@ -287,9 +356,13 @@ function normalizeTaskRecord(item = {}, index = 0, fallback = null) {
     metricsMap0595: detectionMetrics?.map0595 ?? fallback?.metricsMap0595,
     fps: item?.fps ?? item?.frameRate ?? detectionMetrics?.fps ?? fallback?.fps,
     processTime:
-      item?.processTime ?? item?.process_time ?? item?.avgProcessTime ?? fallback?.processTime,
+      item?.processTime ??
+      item?.process_time ??
+      item?.processingTime ??
+      item?.avgProcessTime ??
+      fallback?.processTime,
     delay: item?.delay ?? item?.networkDelay ?? item?.latency ?? fallback?.delay,
-    allTime: item?.allTime ?? item?.totalTime ?? item?.duration ?? fallback?.allTime,
+    allTime: item?.allTime ?? item?.all_time ?? item?.totalTime ?? item?.duration ?? fallback?.allTime,
     latency:
       item?.latency ??
       item?.processTime ??
@@ -333,7 +406,11 @@ function createMockSvgImage({
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-function getHistoryImageTaskMocks() {
+function createMockFrameSeries(configList = []) {
+  return configList.map((config) => createMockSvgImage(config));
+}
+
+function getHistoryTaskMocks() {
   const beforeCity = createMockSvgImage({
     toneA: '#24466a',
     toneB: '#10253c',
@@ -376,6 +453,32 @@ function getHistoryImageTaskMocks() {
     highlight: '#e6fffb',
     dashed: '#5cdbd3',
   });
+  const videoBeforeFrames = createMockFrameSeries([
+    { toneA: '#1f3554', toneB: '#0f2035', accent: '#4f95ff', highlight: '#e6f4ff', dashed: '#69c0ff' },
+    { toneA: '#253f62', toneB: '#12283f', accent: '#40a9ff', highlight: '#e6f7ff', dashed: '#91d5ff' },
+    { toneA: '#2c486c', toneB: '#152c45', accent: '#5fb3ff', highlight: '#f0faff', dashed: '#bae7ff' },
+    { toneA: '#325477', toneB: '#18324d', accent: '#69c0ff', highlight: '#f5fbff', dashed: '#91d5ff' },
+  ]);
+  const videoAfterFrames = createMockFrameSeries([
+    { toneA: '#1e4027', toneB: '#0f2418', accent: '#52c41a', highlight: '#f6ffed', dashed: '#95de64' },
+    { toneA: '#20502d', toneB: '#112b1c', accent: '#73d13d', highlight: '#fcffe6', dashed: '#b7eb8f' },
+    { toneA: '#245e34', toneB: '#143321', accent: '#95de64', highlight: '#f6ffed', dashed: '#d9f7be' },
+    { toneA: '#2a6a3b', toneB: '#173a26', accent: '#b7eb8f', highlight: '#f9ffef', dashed: '#95de64' },
+  ]);
+  const streamBeforeFrames = createMockFrameSeries([
+    { toneA: '#412a63', toneB: '#1d1437', accent: '#b37feb', highlight: '#f9f0ff', dashed: '#d3adf7' },
+    { toneA: '#50347a', toneB: '#251b42', accent: '#9254de', highlight: '#f5f0ff', dashed: '#efdbff' },
+    { toneA: '#5b3f8a', toneB: '#2b214b', accent: '#722ed1', highlight: '#f9f0ff', dashed: '#d3adf7' },
+    { toneA: '#674a99', toneB: '#312855', accent: '#531dab', highlight: '#f5f0ff', dashed: '#b37feb' },
+    { toneA: '#7255a8', toneB: '#372e5f', accent: '#b37feb', highlight: '#f9f0ff', dashed: '#efdbff' },
+  ]);
+  const streamAfterFrames = createMockFrameSeries([
+    { toneA: '#3a2510', toneB: '#1d1409', accent: '#ffa940', highlight: '#fff7e6', dashed: '#ffd591' },
+    { toneA: '#4a2d12', toneB: '#231708', accent: '#faad14', highlight: '#fffbe6', dashed: '#ffe58f' },
+    { toneA: '#573613', toneB: '#2b1e0a', accent: '#ffc53d', highlight: '#fff7e6', dashed: '#ffd591' },
+    { toneA: '#654014', toneB: '#33240d', accent: '#fa8c16', highlight: '#fff7e6', dashed: '#ffd591' },
+    { toneA: '#734916', toneB: '#3b2a10', accent: '#ffa940', highlight: '#fffbe6', dashed: '#ffe58f' },
+  ]);
 
   const mockPayload = [
     {
@@ -471,6 +574,128 @@ function getHistoryImageTaskMocks() {
         createTime: '2026-04-17 16:07:11',
       },
     },
+    {
+      taskId: 'VID-260417-01',
+      taskName: '工业园区巡检-样例视频',
+      taskType: 1,
+      scene: '园区',
+      source: 'mock/industrial_park_01.mp4',
+      taskTime: '2026-04-17 15:48:20',
+      createTime: '2026-04-17 15:48:20',
+      totalCount: 138,
+      status: 2,
+      fps: 30.6,
+      processTime: 41.2,
+      delay: 22.4,
+      allTime: 186000,
+      throughput: 742,
+      confidence: 0.903,
+      beforeImages: videoBeforeFrames,
+      afterImages: videoAfterFrames,
+      beforeImage: videoBeforeFrames[0],
+      afterImage: videoAfterFrames[0],
+      detectionMetricsResult: {
+        precision: 0.914,
+        recall: 0.873,
+        f1Score: 0.893,
+        map05: 0.918,
+        map75: 0.861,
+        map0595: 0.744,
+        createTime: '2026-04-17 15:48:20',
+      },
+    },
+    {
+      taskId: 'VID-260417-02',
+      taskName: '高速路口巡检-样例视频',
+      taskType: 1,
+      scene: '高速公路',
+      source: 'mock/highway_cross_02.mp4',
+      taskTime: '2026-04-17 15:32:06',
+      createTime: '2026-04-17 15:32:06',
+      totalCount: 96,
+      status: 2,
+      fps: 27.9,
+      processTime: 49.7,
+      delay: 29.3,
+      allTime: 152000,
+      throughput: 588,
+      confidence: 0.889,
+      beforeImages: videoBeforeFrames.slice().reverse(),
+      afterImages: videoAfterFrames.slice().reverse(),
+      beforeImage: videoBeforeFrames[3],
+      afterImage: videoAfterFrames[3],
+      detectionMetricsResult: {
+        precision: 0.891,
+        recall: 0.854,
+        f1Score: 0.872,
+        map05: 0.903,
+        map75: 0.839,
+        map0595: 0.721,
+        createTime: '2026-04-17 15:32:06',
+      },
+    },
+    {
+      taskId: 'STR-260417-01',
+      taskName: '港口实时流巡检-样例',
+      taskType: 2,
+      scene: '港口',
+      source: 'rtsp://demo.local/live/port',
+      streamUrl: 'rtsp://demo.local/live/port',
+      taskTime: '2026-04-17 15:10:42',
+      createTime: '2026-04-17 15:10:42',
+      totalCount: 211,
+      status: 1,
+      fps: 31.2,
+      processTime: 38.6,
+      delay: 18.9,
+      allTime: 239000,
+      throughput: 812,
+      confidence: 0.917,
+      beforeImages: streamBeforeFrames,
+      afterImages: streamAfterFrames,
+      beforeImage: streamBeforeFrames[0],
+      afterImage: streamAfterFrames[0],
+      detectionMetricsResult: {
+        precision: 0.923,
+        recall: 0.888,
+        f1Score: 0.905,
+        map05: 0.931,
+        map75: 0.874,
+        map0595: 0.758,
+        createTime: '2026-04-17 15:10:42',
+      },
+    },
+    {
+      taskId: 'STR-260417-02',
+      taskName: '园区实时流巡检-样例',
+      taskType: 2,
+      scene: '园区',
+      source: 'rtsp://demo.local/live/park',
+      streamUrl: 'rtsp://demo.local/live/park',
+      taskTime: '2026-04-17 14:55:31',
+      createTime: '2026-04-17 14:55:31',
+      totalCount: 176,
+      status: 1,
+      fps: 29.8,
+      processTime: 43.1,
+      delay: 24.7,
+      allTime: 224000,
+      throughput: 705,
+      confidence: 0.894,
+      beforeImages: streamBeforeFrames.slice().reverse(),
+      afterImages: streamAfterFrames.slice().reverse(),
+      beforeImage: streamBeforeFrames[4],
+      afterImage: streamAfterFrames[4],
+      detectionMetricsResult: {
+        precision: 0.901,
+        recall: 0.862,
+        f1Score: 0.881,
+        map05: 0.912,
+        map75: 0.846,
+        map0595: 0.729,
+        createTime: '2026-04-17 14:55:31',
+      },
+    },
   ];
 
   return mockPayload.map((item, index) => normalizeTaskRecord(item, index));
@@ -523,6 +748,11 @@ function normalizeTasksPayload(payload) {
   };
 }
 
+function getTaskIdentity(task) {
+  if (!task || typeof task !== 'object') return '';
+  return String(task.taskId ?? task.id ?? '').trim();
+}
+
 async function fetchTasksFromBackend({
   silent = false,
   page = currentPage.value,
@@ -565,7 +795,7 @@ async function fetchTasksFromBackend({
       selectedTaskId.value = tasks.value[0].id;
     }
   } catch (error) {
-    const mockTasks = getHistoryImageTaskMocks();
+    const mockTasks = getHistoryTaskMocks();
     tasks.value = mockTasks;
     useBackendPaging.value = false;
     backendTotal.value = mockTasks.length;
@@ -575,7 +805,7 @@ async function fetchTasksFromBackend({
       selectedTaskId.value = mockTasks[0].id;
     }
     const reason = error?.message ? `(${error.message})` : '';
-    tasksError.value = `后端不可用，已展示本地图片Mock任务${reason}`;
+    tasksError.value = `后端不可用，已展示本地Mock任务（含图片/视频/实时流）${reason}`;
   } finally {
     tasksFetching = false;
     tasksLoading.value = false;
@@ -606,6 +836,7 @@ const searchQuery = ref('');
 // 分页
 const currentPage = ref(1);
 const pageSize = ref(10);
+const pageJumpInput = ref('');
 
 // 添加任务弹窗
 const showAddDialog = ref(false);
@@ -619,6 +850,9 @@ const detailTask = ref(null);
 const detailLoading = ref(false);
 const detailError = ref('');
 const detailSourceTask = ref(null);
+const detailCarouselIndex = ref(0);
+const detailExporting = ref(false);
+const detailExportStatus = ref('');
 
 function buildImageDetailMock(task = {}) {
   const sampleSource = task.source ?? task.pictureName ?? 'dv_ir_00001.jpg';
@@ -666,6 +900,55 @@ function buildImageDetailMock(task = {}) {
   };
 }
 
+function buildMediaDetailMock(task = {}, taskType = 1) {
+  const isStream = Number(taskType) === 2;
+  const beforeFrames = Array.isArray(task.beforeImages) && task.beforeImages.length
+    ? task.beforeImages
+    : createMockFrameSeries([
+        { toneA: '#2a3f61', toneB: '#12243d', accent: '#4f95ff', highlight: '#e6f4ff', dashed: '#91d5ff' },
+        { toneA: '#30486b', toneB: '#162b45', accent: '#69c0ff', highlight: '#f0faff', dashed: '#bae7ff' },
+        { toneA: '#365174', toneB: '#1a314d', accent: '#40a9ff', highlight: '#f5fbff', dashed: '#69c0ff' },
+      ]);
+  const afterFrames = Array.isArray(task.afterImages) && task.afterImages.length
+    ? task.afterImages
+    : createMockFrameSeries([
+        { toneA: '#245737', toneB: '#122c1f', accent: '#52c41a', highlight: '#f6ffed', dashed: '#95de64' },
+        { toneA: '#2a623d', toneB: '#163325', accent: '#73d13d', highlight: '#fcffe6', dashed: '#b7eb8f' },
+        { toneA: '#306d44', toneB: '#1a3a2c', accent: '#95de64', highlight: '#f6ffed', dashed: '#d9f7be' },
+      ]);
+
+  return {
+    taskId: task.taskId ?? (isStream ? 'STR-MOCK-01' : 'VID-MOCK-01'),
+    taskName: task.name ?? (isStream ? '实时流检测任务-演示' : '视频检测任务-演示'),
+    taskType: isStream ? 2 : 1,
+    scene: task.scene ?? (isStream ? '港口' : '园区'),
+    source: task.source ?? (isStream ? 'rtsp://demo.local/live/mock' : 'mock/demo.mp4'),
+    streamUrl: isStream ? task.streamUrl ?? task.source ?? 'rtsp://demo.local/live/mock' : '',
+    beforeImages: beforeFrames,
+    afterImages: afterFrames,
+    beforeImage: task.beforeImage ?? beforeFrames[0],
+    afterImage: task.afterImage ?? afterFrames[0],
+    taskTime: task.taskTime ?? task.createdAt ?? '2026-04-17 15:00:00',
+    createTime: task.createdAt ?? task.taskTime ?? '2026-04-17 15:00:00',
+    targetCount: Number(task.targetCount) || (isStream ? 180 : 120),
+    confidence: Number.isFinite(Number(task.confidence)) ? Number(task.confidence) : 0.9,
+    fps: Number.isFinite(Number(task.fps)) ? Number(task.fps) : (isStream ? 30.2 : 28.4),
+    processTime: Number.isFinite(Number(task.processTime)) ? Number(task.processTime) : 42.5,
+    delay: Number.isFinite(Number(task.delay)) ? Number(task.delay) : 24.1,
+    allTime: Number.isFinite(Number(task.allTime)) ? Number(task.allTime) : 210000,
+    throughput: Number.isFinite(Number(task.throughput)) ? Number(task.throughput) : 720,
+    detectionMetricsResult: {
+      precision: Number.isFinite(Number(task.metricsPrecision)) ? Number(task.metricsPrecision) : 0.9,
+      recall: Number.isFinite(Number(task.metricsRecall)) ? Number(task.metricsRecall) : 0.87,
+      f1Score: Number.isFinite(Number(task.metricsF1Score)) ? Number(task.metricsF1Score) : 0.884,
+      map05: Number.isFinite(Number(task.metricsMap05)) ? Number(task.metricsMap05) : 0.91,
+      map75: Number.isFinite(Number(task.metricsMap75)) ? Number(task.metricsMap75) : 0.85,
+      map0595: Number.isFinite(Number(task.metricsMap0595)) ? Number(task.metricsMap0595) : 0.73,
+      createTime: task.metricsCreateTime ?? task.taskTime ?? '2026-04-17 15:00:00',
+    },
+  };
+}
+
 // 过滤后的任务
 const filteredTasks = computed(() => {
   if (!searchQuery.value.trim()) return tasks.value;
@@ -703,7 +986,7 @@ const pagedTasks = computed(() => {
   return filteredTasks.value.slice(start, start + pageSize.value);
 });
 
-// 页码列表（最多显示5个页码）
+// 页码列表（最多显示 5 个页码）
 const pageNumbers = computed(() => {
   const total = totalPages.value;
   const current = currentPage.value;
@@ -725,6 +1008,18 @@ function goToPage(page) {
     return;
   }
   currentPage.value = page;
+}
+
+function jumpToInputPage() {
+  const target = Number(pageJumpInput.value);
+  if (!Number.isInteger(target)) return;
+  const page = Math.min(totalPages.value, Math.max(1, target));
+  goToPage(page);
+  pageJumpInput.value = String(page);
+}
+
+function onPageJumpInput() {
+  pageJumpInput.value = String(pageJumpInput.value ?? '').replace(/[^\d]/g, '');
 }
 
 function onSearch() {
@@ -813,6 +1108,73 @@ function resolveImageUrl(value) {
   }
 }
 
+function normalizeImageEntry(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return resolveImageUrl(value);
+  if (typeof value === 'object') {
+    const candidate =
+      value.url ??
+      value.image ??
+      value.path ??
+      value.frameUrl ??
+      value.frame ??
+      value.src ??
+      value.resultImage ??
+      value.beforeImage ??
+      value.afterImage;
+    return resolveImageUrl(candidate);
+  }
+  return '';
+}
+
+function parseImageCollection(raw) {
+  if (raw === null || raw === undefined || raw === '') return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'object') {
+    if (Array.isArray(raw.list)) return raw.list;
+    if (Array.isArray(raw.images)) return raw.images;
+    if (Array.isArray(raw.frames)) return raw.frames;
+    return [];
+  }
+  if (typeof raw !== 'string') return [];
+  const text = raw.trim();
+  if (!text) return [];
+  if (text.startsWith('[') || text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      return parseImageCollection(parsed);
+    } catch {
+      return [];
+    }
+  }
+  if (text.includes(',')) {
+    return text
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [text];
+}
+
+function collectDetailImages(task, keys = []) {
+  if (!task || !Array.isArray(keys) || !keys.length) return [];
+  const result = [];
+  keys.forEach((key) => {
+    parseImageCollection(task[key]).forEach((entry) => {
+      const url = normalizeImageEntry(entry);
+      if (url) result.push(url);
+    });
+  });
+  return Array.from(new Set(result));
+}
+
+function getCarouselImage(list, index) {
+  if (!Array.isArray(list) || list.length === 0) return '';
+  const len = list.length;
+  const normalizedIndex = ((index % len) + len) % len;
+  return list[normalizedIndex];
+}
+
 const detailBeforeImageUrl = computed(() => {
   const t = detailTask.value;
   if (!t) return '';
@@ -838,16 +1200,284 @@ const detailAfterImageUrl = computed(() => {
   );
 });
 
+const detailIsMediaTask = computed(() => {
+  const t = detailTask.value;
+  if (!t) return false;
+  return Number(t.taskType) === 1 || Number(t.taskType) === 2;
+});
+
+const detailBeforeImageSlides = computed(() => {
+  const t = detailTask.value;
+  if (!t) return [];
+  const slides = collectDetailImages(t, [
+    'beforeImages',
+    'beforeImageList',
+    'originalImageUrls',
+    'originalImages',
+    'beforeFrames',
+    'beforeFrameList',
+    'sourceFrames',
+    'inputFrames',
+    'originalFrames',
+    'previewFrames',
+  ]);
+  if (!slides.length && detailBeforeImageUrl.value) {
+    slides.push(detailBeforeImageUrl.value);
+  }
+  return slides;
+});
+
+const detailAfterImageSlides = computed(() => {
+  const t = detailTask.value;
+  if (!t) return [];
+  const slides = collectDetailImages(t, [
+    'afterImages',
+    'afterImageList',
+    'detectedImageUrls',
+    'detectedImages',
+    'afterFrames',
+    'afterFrameList',
+    'resultFrames',
+    'detectedFrames',
+    'outputFrames',
+    'renderFrames',
+  ]);
+  if (!slides.length && detailAfterImageUrl.value) {
+    slides.push(detailAfterImageUrl.value);
+  }
+  return slides;
+});
+
+const detailExportImageEntries = computed(() => {
+  const beforeEntries = detailBeforeImageSlides.value.map((url, index) => ({
+    url,
+    group: 'before',
+    index: index + 1,
+  }));
+  const afterEntries = detailAfterImageSlides.value.map((url, index) => ({
+    url,
+    group: 'after',
+    index: index + 1,
+  }));
+  const seen = new Set();
+  return [...beforeEntries, ...afterEntries].filter((entry) => {
+    const key = `${entry.group}|${entry.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+});
+
+const detailCarouselLength = computed(() =>
+  Math.max(detailBeforeImageSlides.value.length, detailAfterImageSlides.value.length),
+);
+
+const detailCurrentBeforeImageUrl = computed(() =>
+  getCarouselImage(detailBeforeImageSlides.value, detailCarouselIndex.value),
+);
+
+const detailCurrentAfterImageUrl = computed(() =>
+  getCarouselImage(detailAfterImageSlides.value, detailCarouselIndex.value),
+);
+
+const detailCarouselPageText = computed(() => {
+  if (detailCarouselLength.value <= 0) return '-- / --';
+  return `${detailCarouselIndex.value + 1} / ${detailCarouselLength.value}`;
+});
+
+function normalizeDetailCarouselIndex() {
+  const total = detailCarouselLength.value;
+  if (total <= 0) {
+    detailCarouselIndex.value = 0;
+    return;
+  }
+  detailCarouselIndex.value =
+    ((detailCarouselIndex.value % total) + total) % total;
+}
+
+function resetDetailCarousel() {
+  detailCarouselIndex.value = 0;
+}
+
+function moveDetailCarousel(delta) {
+  const total = detailCarouselLength.value;
+  if (total <= 1) {
+    detailCarouselIndex.value = 0;
+    return;
+  }
+  detailCarouselIndex.value =
+    ((detailCarouselIndex.value + delta) % total + total) % total;
+}
+
+function prevDetailCarousel() {
+  moveDetailCarousel(-1);
+}
+
+function nextDetailCarousel() {
+  moveDetailCarousel(1);
+}
+
+function goToDetailSlide(index) {
+  if (!Number.isInteger(index)) return;
+  if (index < 0 || index >= detailCarouselLength.value) return;
+  detailCarouselIndex.value = index;
+}
+
+function sanitizeFileToken(value, fallback = 'task') {
+  const normalized = normalizeTextValue(value)
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+function resolveImageExtension(url) {
+  const raw = String(url ?? '').trim();
+  if (!raw) return 'jpg';
+  const dataImageMatch = raw.match(/^data:image\/([^;,]+)/i);
+  if (dataImageMatch?.[1]) {
+    const mime = dataImageMatch[1].toLowerCase();
+    if (mime.includes('svg')) return 'svg';
+    if (mime === 'jpeg') return 'jpg';
+    if (mime === 'jpg') return 'jpg';
+    if (mime === 'png') return 'png';
+    if (mime === 'gif') return 'gif';
+    if (mime === 'webp') return 'webp';
+    if (mime === 'bmp') return 'bmp';
+    if (mime === 'tiff') return 'tiff';
+  }
+  try {
+    const urlObj = new URL(raw, `${httpBase.value}/`);
+    const extMatch = urlObj.pathname.match(/\.(png|jpe?g|webp|bmp|gif|svg|tif|tiff)$/i);
+    if (extMatch?.[1]) {
+      const ext = extMatch[1].toLowerCase();
+      return ext === 'jpeg' ? 'jpg' : ext;
+    }
+  } catch {
+    // Ignore parse failures
+  }
+  return 'jpg';
+}
+
+function isCrossOriginImageUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl ?? '').trim(), window.location.href);
+    return parsed.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function buildDirectDownloadUrl(rawUrl, filename = '') {
+  try {
+    const parsed = new URL(String(rawUrl ?? '').trim(), window.location.href);
+    if (filename) {
+      const encodedName = encodeURIComponent(filename);
+      parsed.searchParams.set(
+        'response-content-disposition',
+        `attachment; filename*=UTF-8''${encodedName}`,
+      );
+    }
+    return parsed.toString();
+  } catch {
+    return String(rawUrl ?? '').trim();
+  }
+}
+
+function triggerDirectDownload(rawUrl, filename) {
+  const href = String(rawUrl ?? '').trim();
+  if (!href) return false;
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return true;
+}
+
+async function downloadImageAsFile(url, filename) {
+  const rawUrl = String(url ?? '').trim();
+  if (!rawUrl) return false;
+
+  // Cross-origin resources (e.g. OSS) may block fetch by CORS.
+  // For these URLs, trigger browser download directly.
+  if (isCrossOriginImageUrl(rawUrl)) {
+    const directUrl = buildDirectDownloadUrl(rawUrl, filename);
+    return triggerDirectDownload(directUrl, filename);
+  }
+
+  try {
+    const response = await fetch(rawUrl, { method: 'GET' });
+    if (!response.ok) return false;
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+    return true;
+  } catch {
+    // Fallback: let browser handle direct URL download.
+    return triggerDirectDownload(rawUrl, filename);
+  }
+}
+
+async function exportDetailAllImages() {
+  if (detailExporting.value) return;
+  const entries = detailExportImageEntries.value;
+  if (!entries.length) {
+    detailExportStatus.value = '暂无可导出的图片';
+    return;
+  }
+
+  const task = detailTask.value ?? {};
+  const taskName = sanitizeFileToken(task.name ?? task.taskName, 'task');
+  const taskId = sanitizeFileToken(task.taskId ?? task.id, 'unknown');
+  detailExporting.value = true;
+  detailExportStatus.value = '';
+
+  let successCount = 0;
+  let failedCount = 0;
+
+  for (const entry of entries) {
+    const ext = resolveImageExtension(entry.url);
+    const order = String(entry.index).padStart(3, '0');
+    const filename = `${taskName}_${taskId}_${entry.group}_${order}.${ext}`;
+    const downloaded = await downloadImageAsFile(entry.url, filename);
+    if (downloaded) {
+      successCount += 1;
+    } else {
+      failedCount += 1;
+    }
+  }
+
+  detailExportStatus.value =
+    failedCount > 0
+      ? `导出完成：成功 ${successCount} 张，失败 ${failedCount} 张`
+      : `导出完成：共 ${successCount} 张`;
+  detailExporting.value = false;
+}
+
+watch(detailCarouselLength, () => {
+  normalizeDetailCarouselIndex();
+});
+
 const hasImageDetail = computed(() => {
   const t = detailTask.value;
   if (!t) return false;
-  return (
-    t.taskType === 0 ||
+  const taskType = Number(t.taskType);
+  const hasImageIdentity =
     t.pictureName !== undefined ||
     t.width !== undefined ||
-    t.height !== undefined ||
-    t.confidence !== undefined
-  );
+    t.height !== undefined;
+  // 仅图片任务展示图片名称/分辨率；若后端漏传 taskType，则用图片字段兜底。
+  return taskType === 0 || hasImageIdentity;
 });
 
 const detailMetaItems = computed(() => {
@@ -882,15 +1512,17 @@ const detailMetaItems = computed(() => {
         label: '分辨率',
         value:
           Number.isFinite(Number(t.width)) && Number.isFinite(Number(t.height))
-            ? `${Number(t.width)} × ${Number(t.height)}`
+            ? `${Number(t.width)} x ${Number(t.height)}`
             : '--',
       },
-      {
-        label: '置信度',
-        value: percentOrDash(t.confidence, 2),
-        tone: toneByScore(t.confidence, 85),
-      },
     );
+  }
+  if (hasImageDetail.value || t.confidence !== undefined) {
+    items.push({
+      label: '置信度',
+      value: percentOrDash(t.confidence, 2),
+      tone: toneByScore(t.confidence, 85),
+    });
   }
   if (t.rawId) {
     items.push({
@@ -1054,6 +1686,7 @@ async function loadTaskDetail(task) {
   detailLoading.value = true;
   detailError.value = '';
   detailTask.value = task;
+  resetDetailCarousel();
   let resolvedTaskType = null;
   try {
     const taskId = String(task?.taskId ?? '').trim();
@@ -1100,6 +1733,12 @@ async function loadTaskDetail(task) {
       detailError.value = '';
       return;
     }
+    if (resolvedTaskType === 1 || resolvedTaskType === 2) {
+      const mockDetail = buildMediaDetailMock(task, resolvedTaskType);
+      detailTask.value = normalizeTaskRecord(mockDetail, 0, task);
+      detailError.value = '';
+      return;
+    }
     detailError.value =
       error.message === 'Failed to fetch'
         ? '无法连接后端服务，请检查后端地址'
@@ -1112,6 +1751,7 @@ async function loadTaskDetail(task) {
 async function openDetailDialog(task, e) {
   e.stopPropagation();
   detailSourceTask.value = task;
+  resetDetailCarousel();
   showDetailDialog.value = true;
   await loadTaskDetail(task);
 }
@@ -1127,6 +1767,9 @@ function closeDetailDialog() {
   detailSourceTask.value = null;
   detailError.value = '';
   detailLoading.value = false;
+  detailExporting.value = false;
+  detailExportStatus.value = '';
+  resetDetailCarousel();
 }
 
 // 生成任务ID
@@ -1173,7 +1816,7 @@ function confirmAddTask() {
     source: newTaskSource.value.trim(),
     createdAt: formatNow(),
     targetCount: 0,
-    status: 'pending',
+    status: 'finished',
   };
   tasks.value.unshift(newTask);
   saveTaskSummaryToStorage({
@@ -1195,13 +1838,7 @@ const showStatusMenu = ref(null);
 
 function setStatus(task, status, e) {
   e.stopPropagation();
-  if (status === 'running') {
-    // 最多只能有一个 running
-    tasks.value.forEach((t) => {
-      if (t.status === 'running') t.status = 'finished';
-    });
-  }
-  task.status = status;
+  task.status = 'finished';
   showStatusMenu.value = null;
 }
 
@@ -1217,11 +1854,81 @@ function refreshTasks() {
   fetchTasksFromBackend({ page: 1, size: pageSize.value });
 }
 
+async function deleteTask(task, e) {
+  e?.stopPropagation?.();
+  const taskId = getTaskIdentity(task);
+  const taskType = resolveTaskType(
+    task?.taskType ?? task?.taskTypeLabel,
+    task?.source ?? task?.inputSource,
+    task?.streamUrl,
+    null,
+    '',
+  );
+  if (!taskId) {
+    tasksError.value = '删除失败：任务ID缺失';
+    return;
+  }
+  if (taskType === null || taskType === undefined) {
+    tasksError.value = '删除失败：任务类型缺失或无法识别';
+    return;
+  }
+  const taskName = String(task?.name ?? task?.taskName ?? taskId).trim();
+  const confirmed = window.confirm(`确认删除任务「${taskName}」吗？`);
+  if (!confirmed) return;
+
+  try {
+    const deleteUrl = new URL(`${httpBase.value}/data/deleteDetail`);
+    deleteUrl.searchParams.set('taskId', taskId);
+    deleteUrl.searchParams.set('taskType', String(taskType));
+
+    const response = await fetch(deleteUrl.toString(), { method: 'DELETE' });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(errText || `HTTP ${response.status}`);
+    }
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      // Some backends may return empty body on DELETE success.
+    }
+    const code = payload?.code;
+    if (code !== undefined && code !== 0 && code !== 200) {
+      throw new Error(payload?.msg || `接口返回异常 (${code})`);
+    }
+
+    tasksError.value = '';
+    tasks.value = tasks.value.filter((item) => getTaskIdentity(item) !== taskId);
+    if (showStatusMenu.value === task.id) {
+      showStatusMenu.value = null;
+    }
+    if (detailSourceTask.value && getTaskIdentity(detailSourceTask.value) === taskId) {
+      closeDetailDialog();
+    }
+    if (!tasks.value.some((item) => item.id === selectedTaskId.value)) {
+      selectedTaskId.value = tasks.value[0]?.id ?? '';
+    }
+    if (useBackendPaging.value && !searchQuery.value.trim()) {
+      const nextPage = tasks.value.length === 0 && currentPage.value > 1 ? currentPage.value - 1 : currentPage.value;
+      await fetchTasksFromBackend({ silent: true, page: nextPage, size: pageSize.value });
+      return;
+    }
+    const maxPage = Math.max(1, Math.ceil(filteredTasks.value.length / pageSize.value));
+    if (currentPage.value > maxPage) {
+      currentPage.value = maxPage;
+    }
+  } catch (error) {
+    const reason = error?.message ? `：${error.message}` : '';
+    tasksError.value = `删除失败${reason}`;
+  }
+}
+
 // 状态显示映射
 const statusLabel = {
-  running: '运行中',
-  finished: '已结束',
-  pending: '待启动',
+  running: '已完成',
+  finished: '已完成',
+  pending: '已完成',
 };
 onActivated(() => {
   startTasksPolling();
@@ -1276,7 +1983,7 @@ onUnmounted(() => {
           <option :value="20">20</option>
           <option :value="50">50</option>
         </select>
-        <label>条</label>
+        <label>鏉</label>
       </div>
     </div>
 
@@ -1316,22 +2023,22 @@ onUnmounted(() => {
                 <!-- 状态下拉菜单 -->
                 <div class="status-dropdown" v-if="showStatusMenu === task.id" @click.stop>
                   <div
-                    class="status-option running"
-                    :class="{ current: task.status === 'running' }"
-                    @click="setStatus(task, 'running', $event)"
-                  >运行中</div>
-                  <div
                     class="status-option finished"
                     :class="{ current: task.status === 'finished' }"
                     @click="setStatus(task, 'finished', $event)"
-                  >已结束</div>
+                  >已完成</div>
                 </div>
               </div>
             </td>
             <td class="op-cell">
-              <button class="action-btn sm" @click="openDetailDialog(task, $event)">
-                查看详情
-              </button>
+              <div class="op-actions">
+                <button class="action-btn sm" @click="openDetailDialog(task, $event)">
+                  查看详情
+                </button>
+                <button class="action-btn sm danger" @click="deleteTask(task, $event)">
+                  删除
+                </button>
+              </div>
             </td>
           </tr>
           <tr v-if="pagedTasks.length === 0">
@@ -1354,6 +2061,19 @@ onUnmounted(() => {
       >{{ p }}</button>
       <button class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">›</button>
       <button class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(totalPages)">»</button>
+      <div class="page-jump">
+        <span>跳至</span>
+        <input
+          v-model="pageJumpInput"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder="页码"
+          @input="onPageJumpInput"
+          @keydown.enter.prevent="jumpToInputPage"
+        />
+        <button class="page-btn jump-btn" @click="jumpToInputPage">GO</button>
+      </div>
       <span class="page-info">第 {{ currentPage }} / {{ totalPages }} 页</span>
     </div>
 
@@ -1423,29 +2143,95 @@ onUnmounted(() => {
                   <span>{{ detailError }}</span>
                   <button class="action-btn sm" @click="retryDetail">重试</button>
                 </div>
-                <div class="detail-preview">
-                  <div class="detail-image-card">
-                    <span class="detail-image-title">检测前图片</span>
-                    <div class="detail-image-box">
-                      <img
-                        v-if="detailBeforeImageUrl"
-                        :src="detailBeforeImageUrl"
-                        alt="检测前图片"
-                      />
-                      <span v-else>暂无检测前图片</span>
+                <div class="detail-preview" :class="{ 'detail-preview-carousel': detailIsMediaTask }">
+                  <template v-if="detailIsMediaTask">
+                    <div class="detail-carousel-stack">
+                      <div class="detail-image-card detail-carousel-card">
+                        <span class="detail-image-title">检测前轮播</span>
+                        <div class="detail-image-box detail-carousel-box">
+                          <img
+                            v-if="detailCurrentBeforeImageUrl"
+                            :src="detailCurrentBeforeImageUrl"
+                            alt="检测前轮播"
+                          />
+                          <span v-else>暂无检测前轮播图像</span>
+                        </div>
+                      </div>
+                      <div class="detail-image-card detail-carousel-card">
+                        <span class="detail-image-title">检测后轮播</span>
+                        <div class="detail-image-box detail-carousel-box">
+                          <img
+                            v-if="detailCurrentAfterImageUrl"
+                            :src="detailCurrentAfterImageUrl"
+                            alt="检测后轮播"
+                          />
+                          <span v-else>暂无检测后轮播图像</span>
+                        </div>
+                      </div>
+                      <div class="detail-carousel-controls">
+                        <button
+                          class="action-btn sm detail-carousel-nav-btn"
+                          :disabled="detailCarouselLength <= 1"
+                          @click="prevDetailCarousel"
+                        >
+                          上一张
+                        </button>
+                        <span class="detail-carousel-page">{{ detailCarouselPageText }}</span>
+                        <button
+                          class="action-btn sm detail-carousel-nav-btn"
+                          :disabled="detailCarouselLength <= 1"
+                          @click="nextDetailCarousel"
+                        >
+                          下一张
+                        </button>
+                        <button
+                          class="action-btn sm detail-export-btn"
+                          :disabled="detailExporting || !detailExportImageEntries.length"
+                          @click="exportDetailAllImages"
+                        >
+                          {{ detailExporting ? '导出中...' : '导出全部图片' }}
+                        </button>
+                      </div>
+                      <div class="detail-carousel-dots" v-if="detailCarouselLength > 1">
+                        <button
+                          v-for="index in detailCarouselLength"
+                          :key="`detail-dot-${index}`"
+                          :class="['detail-carousel-dot', { active: detailCarouselIndex === index - 1 }]"
+                          @click="goToDetailSlide(index - 1)"
+                        ></button>
+                      </div>
+                      <div class="detail-carousel-tip">
+                        当前任务详情的图片为视频中随机截取的图片
+                      </div>
+                      <div v-if="detailExportStatus" class="detail-carousel-tip detail-export-status">
+                        {{ detailExportStatus }}
+                      </div>
                     </div>
-                  </div>
-                  <div class="detail-image-card">
-                    <span class="detail-image-title">检测后图片</span>
-                    <div class="detail-image-box">
-                      <img
-                        v-if="detailAfterImageUrl"
-                        :src="detailAfterImageUrl"
-                        alt="检测后图片"
-                      />
-                      <span v-else>暂无检测后图片</span>
+                  </template>
+                  <template v-else>
+                    <div class="detail-image-card">
+                      <span class="detail-image-title">检测前图片</span>
+                      <div class="detail-image-box">
+                        <img
+                          v-if="detailBeforeImageUrl"
+                          :src="detailBeforeImageUrl"
+                          alt="检测前图片"
+                        />
+                        <span v-else>暂无检测前图片</span>
+                      </div>
                     </div>
-                  </div>
+                    <div class="detail-image-card">
+                      <span class="detail-image-title">检测后图片</span>
+                      <div class="detail-image-box">
+                        <img
+                          v-if="detailAfterImageUrl"
+                          :src="detailAfterImageUrl"
+                          alt="检测后图片"
+                        />
+                        <span v-else>暂无检测后图片</span>
+                      </div>
+                    </div>
+                  </template>
                 </div>
                 <div class="detail-section-title">任务信息</div>
                 <div class="detail-meta-grid">
@@ -1522,6 +2308,11 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+.action-btn.sm {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .action-btn:hover {
   border-color: var(--primary);
   color: var(--primary);
@@ -1540,6 +2331,18 @@ onUnmounted(() => {
 .action-btn.primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.action-btn.danger {
+  color: #ff8f8f;
+  border-color: rgba(255, 143, 143, 0.35);
+  background: rgba(255, 123, 123, 0.08);
+}
+
+.action-btn.danger:hover {
+  color: #ffd2d2;
+  border-color: rgba(255, 143, 143, 0.6);
+  background: rgba(255, 123, 123, 0.18);
 }
 
 .search-box {
@@ -1611,6 +2414,17 @@ onUnmounted(() => {
 /* 状态单元格 */
 .status-cell {
   position: relative;
+}
+
+.op-cell {
+  white-space: nowrap;
+}
+
+.op-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 .status-wrapper {
@@ -1718,6 +2532,35 @@ onUnmounted(() => {
   color: var(--text-dim);
 }
 
+.page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.page-jump input {
+  width: 64px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  padding: 0 8px;
+  outline: none;
+  font-size: 13px;
+}
+
+.page-jump input:focus {
+  border-color: var(--primary);
+}
+
+.jump-btn {
+  min-width: 44px;
+}
+
 /* 弹窗 */
 .dialog-overlay {
   position: fixed;
@@ -1755,10 +2598,108 @@ onUnmounted(() => {
   gap: 16px;
 }
 
+.detail-preview.detail-preview-carousel {
+  display: block;
+}
+
 .detail-image-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.detail-carousel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.detail-carousel-card {
+  width: 100%;
+}
+
+.detail-carousel-box {
+  height: 140px;
+  min-height: 140px;
+}
+
+.detail-carousel-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+
+.detail-carousel-page {
+  min-width: 70px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.detail-carousel-dots {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.detail-carousel-tip {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.9;
+}
+
+.detail-export-btn {
+  min-width: 104px;
+  background: var(--status-bg);
+  border-color: var(--status-border);
+}
+
+.detail-export-btn:hover:not(:disabled) {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.detail-carousel-nav-btn {
+  min-width: 78px;
+  background: var(--status-bg);
+  border-color: var(--status-border);
+}
+
+.detail-carousel-nav-btn:hover:not(:disabled) {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.detail-carousel-tip.detail-export-status {
+  color: var(--primary);
+}
+
+.detail-carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: none;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.detail-carousel-dot.active {
+  width: 20px;
+  background: var(--primary);
 }
 
 .detail-image-title {
@@ -1829,7 +2770,7 @@ onUnmounted(() => {
 
 .metric-card {
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
   background: rgba(138, 177, 230, 0.12);
   padding: 14px 16px;
   display: flex;
@@ -1841,20 +2782,20 @@ onUnmounted(() => {
 .metric-title {
   font-size: 12px;
   font-weight: 600;
-  color: #dfe8ff;
+  color: var(--muted);
 }
 
 .metric-value {
   font-size: 28px;
   font-weight: 700;
   line-height: 1.05;
-  color: #f5f8ff;
+  color: var(--text);
 }
 
 .metric-desc {
   margin-top: auto;
   font-size: 12px;
-  color: #a8bad9;
+  color: var(--muted);
 }
 
 .meta-value.tone-good,
@@ -2000,6 +2941,11 @@ onUnmounted(() => {
   .detail-image-box {
     min-height: 220px;
   }
+
+  .detail-carousel-box {
+    height: 120px;
+    min-height: 120px;
+  }
 }
 
 @media (max-width: 640px) {
@@ -2018,7 +2964,7 @@ onUnmounted(() => {
   }
 }
 
-/* 动画 */
+/* 鍔ㄧ敾 */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s;
@@ -2029,3 +2975,6 @@ onUnmounted(() => {
   opacity: 0;
 }
 </style>
+
+
+

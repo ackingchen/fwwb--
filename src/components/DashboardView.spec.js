@@ -76,7 +76,7 @@ describe("DashboardView", () => {
       "网络已断开",
     );
     expect(wrapper.find(".empty-state-overlay p").text()).toContain(
-      "请检查您的网络连接状态",
+      "请检查网络连接状态",
     );
   });
 
@@ -208,6 +208,83 @@ describe("DashboardView", () => {
     HTMLCanvasElement.prototype.getContext = originalGetContext;
   });
 
+  it("captures screenshot with media source size when stage is larger than overlay canvas", async () => {
+    const mockDrawImage = vi.fn();
+    const mockFillRect = vi.fn();
+    const mockContext = {
+      drawImage: mockDrawImage,
+      fillRect: mockFillRect,
+      get fillStyle() {
+        return this._fillStyle;
+      },
+      set fillStyle(value) {
+        this._fillStyle = value;
+      },
+    };
+
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    const originalCreateElement = document.createElement.bind(document);
+    HTMLCanvasElement.prototype.getContext = () => mockContext;
+    HTMLCanvasElement.prototype.toDataURL = vi
+      .fn()
+      .mockReturnValue("data:image/png;base64,mock");
+    document.createElement = (tagName, options) => {
+      const el = originalCreateElement(tagName, options);
+      if (String(tagName).toLowerCase() === "a") {
+        el.click = vi.fn();
+      }
+      return el;
+    };
+
+    const wrapper = mount(DashboardView);
+    wrapper.vm.activeMode = "image";
+    wrapper.vm.imageUrl = "blob:mock-image";
+    await wrapper.vm.$nextTick();
+
+    const stageEl = wrapper.find(".video-stage").element;
+    Object.defineProperty(stageEl, "clientWidth", {
+      value: 1920,
+      configurable: true,
+    });
+    Object.defineProperty(stageEl, "clientHeight", {
+      value: 1080,
+      configurable: true,
+    });
+    stageEl.getBoundingClientRect = () => ({
+      width: 1920,
+      height: 1080,
+    });
+
+    const overlayCanvas = wrapper.find("canvas").element;
+    overlayCanvas.width = 960;
+    overlayCanvas.height = 540;
+
+    const imgEl = wrapper.find('img[src="blob:mock-image"]').element;
+    Object.defineProperty(imgEl, "complete", {
+      value: true,
+      configurable: true,
+    });
+    Object.defineProperty(imgEl, "naturalWidth", {
+      value: 1280,
+      configurable: true,
+    });
+    Object.defineProperty(imgEl, "naturalHeight", {
+      value: 720,
+      configurable: true,
+    });
+
+    mockDrawImage.mockClear();
+    await wrapper.vm.captureStageScreenshot();
+
+    expect(mockDrawImage).toHaveBeenCalledWith(imgEl, 0, 0, 1280, 720);
+    expect(mockDrawImage).toHaveBeenCalledWith(overlayCanvas, 0, 0, 1280, 720);
+
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
+    document.createElement = originalCreateElement;
+  });
+
   it("clears error when button clicked", async () => {
     const wrapper = mount(DashboardView);
     wrapper.vm.mediaError = "视频检测服务连接失败，请检查后端状态";
@@ -266,5 +343,114 @@ describe("DashboardView", () => {
 
     expect(axios.post).toHaveBeenCalledTimes(1);
     expect(wrapper.vm.uploadState).toBe("uploading"); // Or paused depending on how we called it, let's just check it doesn't succeed
+  });
+
+  it("sends task payload and periodic snapshot command for stream websocket", async () => {
+    vi.useFakeTimers();
+    const originalWebSocket = global.WebSocket;
+    const wsInstances = [];
+
+    class MockWebSocket {
+      static OPEN = 1;
+      constructor(url) {
+        this.url = url;
+        this.readyState = MockWebSocket.OPEN;
+        this.send = vi.fn();
+        this.close = vi.fn(() => {
+          this.readyState = 3;
+          if (this.onclose) this.onclose();
+        });
+        wsInstances.push(this);
+      }
+    }
+
+    global.WebSocket = MockWebSocket;
+    localStorage.setItem(
+      "dashboard_task_summary",
+      JSON.stringify({ taskName: "WS任务", taskType: "视频", scene: "城区" }),
+    );
+
+    const wrapper = mount(DashboardView);
+    wrapper.vm.streamRtspUrl = "rtsp://example/live";
+    wrapper.vm.toggleStream();
+
+    expect(wsInstances.length).toBe(1);
+    wsInstances[0].onopen();
+
+    const streamStartPayload = JSON.parse(wsInstances[0].send.mock.calls[0][0]);
+    expect(streamStartPayload.url).toBe("rtsp://example/live");
+    expect(streamStartPayload.taskName).toBe("WS任务");
+    expect(streamStartPayload.taskType).toBe(2);
+
+    vi.advanceTimersByTime(3000);
+    const hasStreamSnapshot = wsInstances[0].send.mock.calls.some(([raw]) => {
+      try {
+        return JSON.parse(raw).command === "snapshot";
+      } catch {
+        return false;
+      }
+    });
+    expect(hasStreamSnapshot).toBe(true);
+
+    wrapper.unmount();
+    global.WebSocket = originalWebSocket;
+    localStorage.removeItem("dashboard_task_summary");
+    vi.useRealTimers();
+  });
+
+  it("sends task payload and periodic snapshot command for video websocket", async () => {
+    vi.useFakeTimers();
+    const originalWebSocket = global.WebSocket;
+    const wsInstances = [];
+
+    class MockWebSocket {
+      static OPEN = 1;
+      constructor(url) {
+        this.url = url;
+        this.readyState = MockWebSocket.OPEN;
+        this.send = vi.fn();
+        this.close = vi.fn(() => {
+          this.readyState = 3;
+          if (this.onclose) this.onclose();
+        });
+        wsInstances.push(this);
+      }
+    }
+
+    global.WebSocket = MockWebSocket;
+    localStorage.setItem(
+      "dashboard_task_summary",
+      JSON.stringify({ taskName: "视频任务", taskType: "实时流", scene: "港口" }),
+    );
+
+    const wrapper = mount(DashboardView);
+    wrapper.vm.videoFile = new File(["x"], "clip.mp4", { type: "video/mp4" });
+    wrapper.vm.videoTaskId = "task_clip.mp4";
+
+    wrapper.vm.toggleVideoDetection();
+
+    expect(wsInstances.length).toBe(1);
+    wsInstances[0].onopen();
+
+    const videoStartPayload = JSON.parse(wsInstances[0].send.mock.calls[0][0]);
+    expect(videoStartPayload.command).toBe("START");
+    expect(videoStartPayload.videoPath).toBe("task_clip.mp4");
+    expect(videoStartPayload.taskName).toBe("视频任务");
+    expect(videoStartPayload.taskType).toBe(1);
+
+    vi.advanceTimersByTime(3000);
+    const hasVideoSnapshot = wsInstances[0].send.mock.calls.some(([raw]) => {
+      try {
+        return JSON.parse(raw).command === "SNAPSHOT";
+      } catch {
+        return false;
+      }
+    });
+    expect(hasVideoSnapshot).toBe(true);
+
+    wrapper.unmount();
+    global.WebSocket = originalWebSocket;
+    localStorage.removeItem("dashboard_task_summary");
+    vi.useRealTimers();
   });
 });

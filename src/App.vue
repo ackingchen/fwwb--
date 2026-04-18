@@ -157,19 +157,21 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <div v-else-if="isNavigating" class="loading-state">
-        <div class="empty-state-content">
-          <div class="icon spinner">⏳</div>
-          <p>模块加载中...</p>
+      <div v-else class="route-container">
+        <div v-if="isNavigating" class="loading-overlay">
+          <div class="empty-state-content">
+            <div class="icon spinner">⏳</div>
+            <p>模块加载中...</p>
+          </div>
         </div>
+        <router-view v-slot="{ Component, route }">
+          <transition name="fade" mode="out-in">
+            <keep-alive>
+              <component :is="Component" :key="route.fullPath" />
+            </keep-alive>
+          </transition>
+        </router-view>
       </div>
-      <router-view v-else v-slot="{ Component, route }">
-        <transition name="fade" mode="out-in">
-          <keep-alive>
-            <component :is="Component" :key="route.fullPath" />
-          </keep-alive>
-        </transition>
-      </router-view>
     </main>
 
     <AiAssistant />
@@ -186,6 +188,20 @@ onUnmounted(() => {
   min-height: 50vh;
   text-align: center;
   color: var(--muted);
+}
+.route-container {
+  position: relative;
+  min-height: 50vh;
+}
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  pointer-events: none;
 }
 .empty-state-content {
   display: flex;
