@@ -1369,22 +1369,6 @@ function isCrossOriginImageUrl(rawUrl) {
   }
 }
 
-function buildDirectDownloadUrl(rawUrl, filename = '') {
-  try {
-    const parsed = new URL(String(rawUrl ?? '').trim(), window.location.href);
-    if (filename) {
-      const encodedName = encodeURIComponent(filename);
-      parsed.searchParams.set(
-        'response-content-disposition',
-        `attachment; filename*=UTF-8''${encodedName}`,
-      );
-    }
-    return parsed.toString();
-  } catch {
-    return String(rawUrl ?? '').trim();
-  }
-}
-
 function triggerDirectDownload(rawUrl, filename) {
   const href = String(rawUrl ?? '').trim();
   if (!href) return false;
@@ -1403,10 +1387,9 @@ async function downloadImageAsFile(url, filename) {
   if (!rawUrl) return false;
 
   // Cross-origin resources (e.g. OSS) may block fetch by CORS.
-  // For these URLs, trigger browser download directly.
+  // Keep the original full URL and trigger browser download directly.
   if (isCrossOriginImageUrl(rawUrl)) {
-    const directUrl = buildDirectDownloadUrl(rawUrl, filename);
-    return triggerDirectDownload(directUrl, filename);
+    return triggerDirectDownload(rawUrl, filename);
   }
 
   try {

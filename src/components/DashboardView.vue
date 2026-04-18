@@ -12,6 +12,7 @@ import {
   onDeactivated,
 } from "vue";
 import axios from "axios";
+import defaultReferenceTxtRaw from "../../dv_ir_00001.txt?raw";
 
 const configStore = useConfigStore();
 const dataStore = useDataStore();
@@ -37,6 +38,26 @@ const DASHBOARD_LOG_LIMIT = 120;
 
 const getLogTime = () =>
   new Date().toLocaleTimeString("zh-CN", { hour12: false });
+
+const normalizeRuntimeErrorMessage = (message) =>
+  String(message ?? "").trim().toLowerCase();
+
+const isIgnorableRuntimeErrorMessage = (message) => {
+  const normalized = normalizeRuntimeErrorMessage(message);
+  return (
+    normalized === "script error" ||
+    normalized === "script error." ||
+    normalized.startsWith("script error:")
+  );
+};
+
+const sanitizeFrontendLogs = (logs = []) =>
+  Array.isArray(logs)
+    ? logs
+        .filter((item) => item && typeof item === "object")
+        .filter((item) => !isIgnorableRuntimeErrorMessage(item.message))
+        .slice(0, DASHBOARD_LOG_LIMIT)
+    : [];
 
 const pushFrontendLog = (message, level = "info") => {
   frontendLogs.value = [
@@ -68,6 +89,14 @@ const quickTaskDialogVisible = ref(false);
 const quickTaskName = ref("");
 const quickTaskScene = ref("");
 const quickTaskSource = ref("");
+const txtUploadDialogVisible = ref(false);
+const txtDropActive = ref(false);
+const txtUploadInputRef = ref(null);
+const txtFileEntry = ref(null);
+const txtUploadedSignature = ref("");
+const txtFallbackSignature = ref("");
+const txtUploadState = ref("idle"); // idle | pending | uploading | success | error
+const txtUploadError = ref("");
 const quickTaskSceneOptions = ["城市", "山地", "农田", "水域", "森林", "隧道", "港口", "高速公路"];
 const quickTaskSourceOptions = ["图片", "视频", "实时流"];
 const QUICK_SOURCE_TO_TASK_TYPE = {
@@ -200,6 +229,156 @@ const openQuickCreateTaskDialog = () => {
 
 const closeQuickCreateTaskDialog = () => {
   quickTaskDialogVisible.value = false;
+};
+
+const openTxtUploadDialog = () => {
+  txtDropActive.value = false;
+  txtUploadDialogVisible.value = true;
+};
+
+const closeTxtUploadDialog = () => {
+  txtDropActive.value = false;
+  txtUploadDialogVisible.value = false;
+};
+
+const isTxtFile = (file) => {
+  const name = String(file?.name || "").toLowerCase();
+  const type = String(file?.type || "").toLowerCase();
+  return name.endsWith(".txt") || type === "text/plain";
+};
+
+const getTxtFileSignature = (file) => {
+  if (!(file instanceof File)) return "";
+  return `${file.name}|${file.size}|${file.lastModified}`;
+};
+
+const normalizeTxtFileName = (name) => String(name || "").trim().toLowerCase();
+
+const isTemplateTxtFileName = (name) => {
+  const normalized = normalizeTxtFileName(name);
+  if (!normalized) return false;
+  return [TXT_TEMPLATE_FILE_NAME, DEFAULT_REFERENCE_TXT_FILE_NAME]
+    .map((item) => normalizeTxtFileName(item))
+    .includes(normalized);
+};
+
+const resolveImageTxtFallbackReason = () => {
+  const selectedTxt = txtFileEntry.value?.file;
+  if (!(selectedTxt instanceof File)) return "missing";
+  if (isTemplateTxtFileName(selectedTxt.name)) return "template_name";
+  return "";
+};
+
+const confirmContinueWithDefaultReferenceTxt = () => {
+  const message = `当前文件未上传或者和模板文件重名，将使用默认参考文件 ${DEFAULT_REFERENCE_TXT_FILE_NAME} 上传给后端，是否继续进行检测？`;
+  if (typeof window === "undefined" || typeof window.confirm !== "function") {
+    return true;
+  }
+  try {
+    return window.confirm(message);
+  } catch {
+    return true;
+  }
+};
+
+const setSelectedTxtFile = (file) => {
+  if (!(file instanceof File) || !isTxtFile(file)) return false;
+  const incomingSignature = getTxtFileSignature(file);
+  const currentSignature = txtFileEntry.value
+    ? getTxtFileSignature(txtFileEntry.value.file)
+    : "";
+
+  if (incomingSignature === currentSignature) {
+    pushFrontendLog("当前 TXT 文件未变化，无需重复选择", "info");
+    return false;
+  }
+
+  txtFileEntry.value = {
+    id: `txt-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    name: file.name,
+    size: Number(file.size) || 0,
+    lastModified: Number(file.lastModified) || 0,
+    file,
+  };
+  txtUploadState.value = "pending";
+  txtUploadError.value = "";
+
+  if (txtUploadedSignature.value !== incomingSignature) {
+    txtUploadedSignature.value = "";
+  }
+  txtFallbackSignature.value = "";
+  pushFrontendLog("已选择新的 TXT 文件，后续图片检测时将自动上传", "success");
+  return true;
+};
+
+const addTxtFiles = (incomingFiles) => {
+  const files = Array.from(incomingFiles || []);
+  if (!files.length) return;
+
+  const validFiles = files.filter((file) => file instanceof File && isTxtFile(file));
+  if (validFiles.length === 0) {
+    pushFrontendLog("未检测到可用 TXT 文件", "warning");
+    return;
+  }
+  if (validFiles.length > 1) {
+    pushFrontendLog("仅支持单个 TXT 文件，已自动取第一个文件", "warning");
+  }
+
+  setSelectedTxtFile(validFiles[0]);
+};
+
+const triggerTxtFilePicker = () => {
+  txtUploadInputRef.value?.click();
+};
+
+const onTxtFileInputChange = (event) => {
+  addTxtFiles(event?.target?.files);
+  if (event?.target) {
+    event.target.value = "";
+  }
+};
+
+const onTxtDropzoneDragEnter = (event) => {
+  event.preventDefault();
+  txtDropActive.value = true;
+};
+
+const onTxtDropzoneDragOver = (event) => {
+  event.preventDefault();
+  txtDropActive.value = true;
+};
+
+const onTxtDropzoneDragLeave = (event) => {
+  event.preventDefault();
+  txtDropActive.value = false;
+};
+
+const onTxtDropzoneDrop = (event) => {
+  event.preventDefault();
+  txtDropActive.value = false;
+  addTxtFiles(event?.dataTransfer?.files);
+};
+
+const removeTxtFile = () => {
+  if (!txtFileEntry.value) return;
+  txtFileEntry.value = null;
+  txtUploadedSignature.value = "";
+  txtFallbackSignature.value = "";
+  txtUploadState.value = "idle";
+  txtUploadError.value = "";
+  pushFrontendLog("已移除 TXT 文件", "info");
+};
+
+const clearTxtFiles = () => {
+  removeTxtFile();
+};
+
+const formatTxtFileSize = (bytes) => {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
 };
 
 const confirmQuickCreateTask = () => {
@@ -809,6 +988,198 @@ let videoSnapshotInterval = null;
 let videoBuffer = [];
 let videoAnimationId = null;
 
+// AMap module state
+const AMAP_JS_KEY = "747970c679a9415c54d728564a5113d7";
+const AMAP_SCRIPT_URL = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_JS_KEY}`;
+const MAP_DEFAULT_DRONE_POS = Object.freeze({
+  lat: 39.9042,
+  lng: 116.4074,
+  yaw: 35,
+});
+const MAP_TARGET_MARKER_LIMIT = 80;
+const MAP_MAX_POINT_RADIUS_M = 45;
+const MAP_JITTER_RADIUS_M = 2.2;
+const MAP_METERS_PER_DEGREE = 111320;
+const mapContainerRef = ref(null);
+const mapReady = ref(false);
+const mapLoading = ref(false);
+const mapError = ref("");
+const mapDronePos = ref({ ...MAP_DEFAULT_DRONE_POS });
+const mapTargetCoords = ref([]);
+const mapSourceDetections = ref([]);
+const mapVisibleDetections = ref([]);
+let dashboardMap = null;
+let dashboardDroneMarker = null;
+let dashboardTargetMarkers = [];
+let amapScriptPromise = null;
+let mapCenteredOnce = false;
+const MAP_TELEMETRY_SYNC_PATH = "/map/telemetry";
+const MAP_TELEMETRY_DEBOUNCE_MS = 500;
+const mapTelemetryDraft = ref({
+  lat: Number(MAP_DEFAULT_DRONE_POS.lat).toFixed(5),
+  lng: Number(MAP_DEFAULT_DRONE_POS.lng).toFixed(5),
+  yaw: String(Math.round(Number(MAP_DEFAULT_DRONE_POS.yaw))),
+});
+const mapTelemetrySyncState = ref("idle"); // idle | syncing | success | error
+const mapTelemetryMessage = ref("");
+let mapTelemetryDebounceTimer = null;
+let mapTelemetryRequestController = null;
+
+const isIntermediateNumberInput = (value) => {
+  const text = String(value ?? "").trim();
+  return text === "" || /^-?$|^\.$|^-\.$|^-?\d+\.$/.test(text);
+};
+
+const formatTelemetryYaw = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  return num
+    .toFixed(2)
+    .replace(/\.00$/, "")
+    .replace(/(\.\d)0$/, "$1");
+};
+
+const normalizeMapTelemetryDraftFromPos = (pos = mapDronePos.value) => ({
+  lat: Number(pos?.lat ?? MAP_DEFAULT_DRONE_POS.lat).toFixed(5),
+  lng: Number(pos?.lng ?? MAP_DEFAULT_DRONE_POS.lng).toFixed(5),
+  yaw: formatTelemetryYaw(pos?.yaw ?? MAP_DEFAULT_DRONE_POS.yaw),
+});
+
+const syncMapTelemetryDraftFromPos = () => {
+  mapTelemetryDraft.value = normalizeMapTelemetryDraftFromPos(mapDronePos.value);
+};
+
+const clearMapTelemetryDebounce = () => {
+  if (mapTelemetryDebounceTimer) {
+    clearTimeout(mapTelemetryDebounceTimer);
+    mapTelemetryDebounceTimer = null;
+  }
+};
+
+const abortMapTelemetryRequest = () => {
+  if (mapTelemetryRequestController) {
+    mapTelemetryRequestController.abort();
+    mapTelemetryRequestController = null;
+  }
+};
+
+const validateMapTelemetryDraft = (draft = mapTelemetryDraft.value) => {
+  const rawLat = String(draft?.lat ?? "").trim();
+  const rawLng = String(draft?.lng ?? "").trim();
+  const rawYaw = String(draft?.yaw ?? "").trim();
+
+  if (
+    isIntermediateNumberInput(rawLat) ||
+    isIntermediateNumberInput(rawLng) ||
+    isIntermediateNumberInput(rawYaw)
+  ) {
+    return { status: "pending" };
+  }
+
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  const yaw = Number(rawYaw);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(yaw)) {
+    return { status: "invalid", message: "请输入有效数字" };
+  }
+  if (lat < -90 || lat > 90) {
+    return { status: "invalid", message: "纬度范围应为 -90 到 90" };
+  }
+  if (lng < -180 || lng > 180) {
+    return { status: "invalid", message: "经度范围应为 -180 到 180" };
+  }
+  if (yaw < 0 || yaw > 360) {
+    return { status: "invalid", message: "航向范围应为 0 到 360" };
+  }
+
+  return {
+    status: "ok",
+    payload: {
+      lat,
+      lng,
+      yaw,
+    },
+  };
+};
+
+const syncMapTelemetryToBackend = async (payload) => {
+  if (!payload || isOffline.value) return;
+  abortMapTelemetryRequest();
+  const controller = new AbortController();
+  mapTelemetryRequestController = controller;
+  mapTelemetrySyncState.value = "syncing";
+  mapTelemetryMessage.value = "";
+  try {
+    const response = await fetch(`${httpBase.value}${MAP_TELEMETRY_SYNC_PATH}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        lat: payload.lat,
+        lng: payload.lng,
+        yaw: payload.yaw,
+        mode: activeMode.value,
+        timestamp: Date.now(),
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`状态码 ${response.status}`);
+    }
+    mapTelemetrySyncState.value = "success";
+    mapTelemetryMessage.value = "";
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    mapTelemetrySyncState.value = "error";
+    mapTelemetryMessage.value = error?.message || "地图参数同步失败";
+    pushFrontendLog(`地图参数同步失败: ${mapTelemetryMessage.value}`, "warning");
+  } finally {
+    if (mapTelemetryRequestController === controller) {
+      mapTelemetryRequestController = null;
+    }
+  }
+};
+
+const scheduleMapTelemetrySync = (payload) => {
+  clearMapTelemetryDebounce();
+  mapTelemetryDebounceTimer = setTimeout(() => {
+    mapTelemetryDebounceTimer = null;
+    syncMapTelemetryToBackend(payload);
+  }, MAP_TELEMETRY_DEBOUNCE_MS);
+};
+
+const onMapTelemetryInput = () => {
+  const validation = validateMapTelemetryDraft(mapTelemetryDraft.value);
+  if (validation.status === "pending") {
+    if (mapTelemetrySyncState.value !== "syncing") {
+      mapTelemetrySyncState.value = "idle";
+    }
+    mapTelemetryMessage.value = "";
+    return;
+  }
+  if (validation.status === "invalid") {
+    mapTelemetrySyncState.value = "error";
+    mapTelemetryMessage.value = validation.message;
+    clearMapTelemetryDebounce();
+    return;
+  }
+
+  mapTelemetrySyncState.value = "idle";
+  mapTelemetryMessage.value = "";
+  mapDronePos.value = {
+    ...mapDronePos.value,
+    ...validation.payload,
+  };
+  scheduleMapTelemetrySync(validation.payload);
+};
+
+const onMapTelemetryBlur = () => {
+  const validation = validateMapTelemetryDraft(mapTelemetryDraft.value);
+  if (validation.status !== "ok") return;
+  mapTelemetryDraft.value = normalizeMapTelemetryDraftFromPos(validation.payload);
+};
+
 // Mode: Video Upload State
 const uploadState = ref("idle"); // 'idle', 'uploading', 'paused', 'success', 'error'
 const uploadProgress = ref(0);
@@ -821,6 +1192,7 @@ let uploadCancelController = null;
 const imageFile = ref(null);
 const imageUrl = ref("");
 const imageDetecting = ref(false);
+const imageDetectionDone = ref(false);
 const localImg = ref(null);
 const imageSourceWidth = ref(null);
 const imageSourceHeight = ref(null);
@@ -852,6 +1224,13 @@ const LABEL_CONTENT = `3 0.120833 0.575843 0.039286 0.098315
 3 0.402976 0.588483 0.032143 0.089888
 3 0.363690 0.585674 0.039286 0.092697
 3 0.323214 0.576545 0.044048 0.099719`;
+const DEFAULT_REFERENCE_TXT_FILE_NAME = "dv_ir_00001.txt";
+const DEFAULT_REFERENCE_TXT_CONTENT =
+  typeof defaultReferenceTxtRaw === "string" && defaultReferenceTxtRaw.length > 0
+    ? defaultReferenceTxtRaw
+    : LABEL_CONTENT;
+const TXT_TEMPLATE_FILE_NAME = "模板文件.txt";
+const TXT_TEMPLATE_GUIDE_FILE_NAME = "模板文件使用告知图.png";
 
 // Global detections list to render on canvas
 let canvasDetections = [];
@@ -885,6 +1264,313 @@ const hasMediaSource = computed(() => {
   return false;
 });
 
+const shouldSkipAmapLoad = () =>
+  typeof navigator !== "undefined" &&
+  /jsdom/i.test(String(navigator.userAgent || ""));
+
+const isMapDetectionActive = () => {
+  if (activeMode.value === "stream") return streamConnected.value;
+  if (activeMode.value === "video") return videoConnected.value;
+  if (activeMode.value === "image") return imageDetectionDone.value;
+  return false;
+};
+
+const normalizeMapDetectionList = (detections = []) =>
+  (Array.isArray(detections) ? detections : [])
+    .filter((item) => {
+      if (!isDetectionCategoryEnabled(item)) return false;
+      const conf = normalizeConfidenceRatio(
+        item?.confidence ?? item?.score ?? item?.probability ?? item?.conf,
+      );
+      if (conf !== undefined && conf < confidence.value) return false;
+      return true;
+    })
+    .slice(0, MAP_TARGET_MARKER_LIMIT);
+
+const getMockMapOffsetByIndex = (index) => {
+  const angle = (index * 137.5 * Math.PI) / 180;
+  const ring = 0.35 + (index % 6) * 0.1;
+  return {
+    x: Math.cos(angle) * MAP_JITTER_RADIUS_M * ring,
+    y: Math.sin(angle) * MAP_JITTER_RADIUS_M * ring,
+  };
+};
+
+const buildMockTargetCoordsFromDetections = (detections = []) => {
+  const sourceList = normalizeMapDetectionList(detections);
+  if (sourceList.length === 0) return [];
+
+  const boxMetrics = sourceList.map((item) => {
+    const bbox = normalizeDetectionBbox(
+      item?.bbox ?? item?.box ?? item?.xyxy ?? item?.rect ?? item?.coordinates,
+    );
+    if (!bbox || bbox.length < 4) return { centerX: null, centerY: null, x2: null, y2: null };
+    const [x1, y1, x2, y2] = bbox;
+    const centerX = toNumberOrUndefined((x1 + x2) / 2);
+    const centerY = toNumberOrUndefined((y1 + y2) / 2);
+    return {
+      centerX: Number.isFinite(centerX) ? centerX : null,
+      centerY: Number.isFinite(centerY) ? centerY : null,
+      x2: Number.isFinite(toNumberOrUndefined(x2)) ? Number(x2) : null,
+      y2: Number.isFinite(toNumberOrUndefined(y2)) ? Number(y2) : null,
+    };
+  });
+
+  const frameWidth = Math.max(
+    1,
+    ...boxMetrics
+      .map((item) => item.x2)
+      .filter((item) => Number.isFinite(item)),
+  );
+  const frameHeight = Math.max(
+    1,
+    ...boxMetrics
+      .map((item) => item.y2)
+      .filter((item) => Number.isFinite(item)),
+  );
+
+  const metersPerDegLat = MAP_METERS_PER_DEGREE;
+  const metersPerDegLng = Math.max(
+    1,
+    MAP_METERS_PER_DEGREE *
+      Math.cos((Number(mapDronePos.value.lat || 0) * Math.PI) / 180),
+  );
+
+  return sourceList.map((item, index) => {
+    const metric = boxMetrics[index];
+    const fallbackX = ((index % 5) - 2) / 2.5;
+    const fallbackY = ((Math.floor(index / 5) % 5) - 2) / 2.5;
+    const nx =
+      Number.isFinite(metric?.centerX)
+        ? (Number(metric.centerX) / frameWidth - 0.5) * 2
+        : fallbackX;
+    const ny =
+      Number.isFinite(metric?.centerY)
+        ? (Number(metric.centerY) / frameHeight - 0.5) * 2
+        : fallbackY;
+    const jitter = getMockMapOffsetByIndex(index);
+
+    let vx = nx + jitter.x / MAP_MAX_POINT_RADIUS_M;
+    let vy = ny + jitter.y / MAP_MAX_POINT_RADIUS_M;
+    const vectorNorm = Math.hypot(vx, vy);
+    if (vectorNorm > 1) {
+      vx /= vectorNorm;
+      vy /= vectorNorm;
+    }
+
+    const offsetEastMeters = vx * MAP_MAX_POINT_RADIUS_M;
+    const offsetNorthMeters = -vy * MAP_MAX_POINT_RADIUS_M;
+
+    return {
+      lat: mapDronePos.value.lat + offsetNorthMeters / metersPerDegLat,
+      lng: mapDronePos.value.lng + offsetEastMeters / metersPerDegLng,
+    };
+  });
+};
+
+const ensureAmapScriptLoaded = () => {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return Promise.reject(new Error("amap_unavailable"));
+  }
+  if (window.AMap && typeof window.AMap.Map === "function") {
+    return Promise.resolve(window.AMap);
+  }
+  if (amapScriptPromise) return amapScriptPromise;
+
+  amapScriptPromise = new Promise((resolve, reject) => {
+    const resolveLoaded = () => {
+      if (window.AMap && typeof window.AMap.Map === "function") {
+        resolve(window.AMap);
+      } else {
+        amapScriptPromise = null;
+        reject(new Error("amap_unavailable"));
+      }
+    };
+
+    const handleError = () => {
+      amapScriptPromise = null;
+      reject(new Error("amap_script_failed"));
+    };
+
+    const existingScript =
+      document.querySelector('script[data-dashboard-amap="true"]') ||
+      document.querySelector('script[src*="webapi.amap.com/maps"]');
+
+    if (existingScript) {
+      if (window.AMap && typeof window.AMap.Map === "function") {
+        resolve(window.AMap);
+        return;
+      }
+      existingScript.addEventListener("load", resolveLoaded, { once: true });
+      existingScript.addEventListener("error", handleError, { once: true });
+      return;
+    }
+
+    if (!window._AMapSecurityConfig) {
+      window._AMapSecurityConfig = { securityJsCode: "" };
+    }
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.defer = true;
+    script.src = AMAP_SCRIPT_URL;
+    script.setAttribute("data-dashboard-amap", "true");
+    script.addEventListener("load", resolveLoaded, { once: true });
+    script.addEventListener("error", handleError, { once: true });
+    document.head.appendChild(script);
+  });
+
+  return amapScriptPromise;
+};
+
+const createDroneMarkerContent = () =>
+  '<div class="dashboard-map-drone-icon"><span class="dashboard-map-drone-core"></span></div>';
+
+const syncDashboardDroneMarker = () => {
+  if (!dashboardMap || !window.AMap) return;
+  const position = [mapDronePos.value.lng, mapDronePos.value.lat];
+  if (!dashboardDroneMarker) {
+    dashboardDroneMarker = new window.AMap.Marker({
+      position,
+      content: createDroneMarkerContent(),
+      offset: new window.AMap.Pixel(-14, -14),
+      anchor: "center",
+      zIndex: 120,
+    });
+    dashboardMap.add(dashboardDroneMarker);
+  } else {
+    dashboardDroneMarker.setPosition(position);
+  }
+
+  if (typeof dashboardDroneMarker.setAngle === "function") {
+    dashboardDroneMarker.setAngle(mapDronePos.value.yaw || 0);
+  }
+
+  if (!mapCenteredOnce) {
+    dashboardMap.setCenter(position);
+    mapCenteredOnce = true;
+  }
+};
+
+const syncDashboardTargetMarkers = () => {
+  if (!dashboardMap || !window.AMap) return;
+  const points = mapTargetCoords.value;
+
+  if (dashboardTargetMarkers.length > points.length) {
+    const removed = dashboardTargetMarkers.splice(points.length);
+    if (removed.length) {
+      dashboardMap.remove(removed);
+    }
+  }
+
+  points.forEach((point, index) => {
+    const position = [point.lng, point.lat];
+    if (dashboardTargetMarkers[index]) {
+      dashboardTargetMarkers[index].setPosition(position);
+      return;
+    }
+    const marker = new window.AMap.Marker({
+      position,
+      content: '<span class="dashboard-map-target-dot"></span>',
+      offset: new window.AMap.Pixel(-5, -5),
+      anchor: "center",
+      zIndex: 110,
+    });
+    dashboardMap.add(marker);
+    dashboardTargetMarkers.push(marker);
+  });
+};
+
+const refreshMapTargetsFromVisibleDetections = (detections = mapSourceDetections.value) => {
+  if (Array.isArray(detections)) {
+    mapSourceDetections.value = detections.slice(0, MAP_TARGET_MARKER_LIMIT * 3);
+  }
+
+  if (!isMapDetectionActive()) {
+    mapSourceDetections.value = [];
+    mapVisibleDetections.value = [];
+    if (mapTargetCoords.value.length > 0) {
+      mapTargetCoords.value = [];
+      syncDashboardTargetMarkers();
+    }
+    return;
+  }
+
+  const visibleDetections = normalizeMapDetectionList(mapSourceDetections.value);
+  mapVisibleDetections.value = visibleDetections;
+  mapTargetCoords.value = buildMockTargetCoordsFromDetections(visibleDetections);
+  syncDashboardTargetMarkers();
+};
+
+const resizeDashboardMap = () => {
+  if (!dashboardMap || typeof dashboardMap.resize !== "function") return;
+  dashboardMap.resize();
+};
+
+const initDashboardMap = async () => {
+  if (shouldSkipAmapLoad()) return;
+  if (!mapContainerRef.value || mapLoading.value) return;
+  if (dashboardMap) {
+    mapReady.value = true;
+    mapError.value = "";
+    resizeDashboardMap();
+    syncDashboardDroneMarker();
+    syncDashboardTargetMarkers();
+    return;
+  }
+
+  mapLoading.value = true;
+  mapError.value = "";
+  try {
+    const AMapGlobal = await ensureAmapScriptLoaded();
+    if (!mapContainerRef.value) return;
+    dashboardMap = new AMapGlobal.Map(mapContainerRef.value, {
+      viewMode: "2D",
+      zoom: 16,
+      center: [mapDronePos.value.lng, mapDronePos.value.lat],
+      resizeEnable: true,
+      zoomEnable: true,
+    });
+
+    if (
+      AMapGlobal?.TileLayer?.Satellite &&
+      AMapGlobal?.TileLayer?.RoadNet
+    ) {
+      const satelliteLayer = new AMapGlobal.TileLayer.Satellite();
+      const roadNetLayer = new AMapGlobal.TileLayer.RoadNet({ opacity: 0.5 });
+      dashboardMap.add([satelliteLayer, roadNetLayer]);
+    }
+
+    mapReady.value = true;
+    mapCenteredOnce = false;
+    syncDashboardDroneMarker();
+    syncDashboardTargetMarkers();
+  } catch {
+    mapReady.value = false;
+    mapError.value = "地图加载失败，请检查网络或地图 Key";
+    pushFrontendLog("地图模块加载失败，已跳过地图渲染", "warning");
+  } finally {
+    mapLoading.value = false;
+  }
+};
+
+const destroyDashboardMap = () => {
+  if (dashboardMap && dashboardTargetMarkers.length) {
+    dashboardMap.remove(dashboardTargetMarkers);
+  }
+  dashboardTargetMarkers = [];
+  if (dashboardMap && dashboardDroneMarker) {
+    dashboardMap.remove(dashboardDroneMarker);
+  }
+  dashboardDroneMarker = null;
+  mapCenteredOnce = false;
+  if (dashboardMap && typeof dashboardMap.destroy === "function") {
+    dashboardMap.destroy();
+  }
+  dashboardMap = null;
+  mapReady.value = false;
+};
+
 const viewportWidth = ref(
   typeof window !== "undefined" ? window.innerWidth : 1920,
 );
@@ -916,12 +1602,14 @@ const switchMode = (mode) => {
   clearPendingRealtimeDetections();
   clearCanvas();
   canvasDetections = [];
+  imageDetectionDone.value = false;
   scheduleDetectionsToStore([], {
     idPrefix: "MODE",
     timestampFallback: getLogTime(),
   });
   imageSourceWidth.value = null;
   imageSourceHeight.value = null;
+  refreshMapTargetsFromVisibleDetections([]);
   pushFrontendLog(`已切换到${modeLabelMap[mode] || mode}模式`, "info");
 };
 
@@ -1126,6 +1814,27 @@ const downloadDataUrl = (dataUrl, filename) => {
   document.body.removeChild(link);
 };
 
+const downloadStaticAsset = (relativePath, filename) => {
+  const baseUrl = String(import.meta.env.BASE_URL || "/");
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  const normalizedPath = String(relativePath || "").replace(/^\/+/, "");
+  const assetUrl = `${normalizedBase}${encodeURI(normalizedPath)}`;
+  const link = document.createElement("a");
+  link.href = assetUrl;
+  link.download = filename || normalizedPath;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+const downloadTxtTemplateAssets = () => {
+  downloadStaticAsset(TXT_TEMPLATE_FILE_NAME, TXT_TEMPLATE_FILE_NAME);
+  setTimeout(() => {
+    downloadStaticAsset(TXT_TEMPLATE_GUIDE_FILE_NAME, TXT_TEMPLATE_GUIDE_FILE_NAME);
+  }, 120);
+  pushFrontendLog(`已下载 ${TXT_TEMPLATE_FILE_NAME} 和 ${TXT_TEMPLATE_GUIDE_FILE_NAME}`, "success");
+};
+
 const captureStageScreenshot = async () => {
   if (screenshotInProgress.value) return;
   screenshotInProgress.value = true;
@@ -1271,6 +1980,7 @@ const toggleStream = () => {
       idPrefix: "STREAM",
       timestampFallback: getLogTime(),
     });
+    refreshMapTargetsFromVisibleDetections([]);
     pushFrontendLog("已停止实时流检测", "info");
   } else {
     if (isOffline.value) {
@@ -1301,7 +2011,8 @@ const toggleStream = () => {
         const data = JSON.parse(event.data);
         if (data.image) {
           streamBase64.value = "data:image/jpeg;base64," + data.image;
-          canvasDetections = data.detections || [];
+          canvasDetections = Array.isArray(data.detections) ? data.detections : [];
+          refreshMapTargetsFromVisibleDetections(canvasDetections);
           scheduleDetectionsToStore(canvasDetections, {
             idPrefix: "STREAM",
             timestampFallback: getLogTime(),
@@ -1311,6 +2022,7 @@ const toggleStream = () => {
       streamWs.onerror = () => {
         clearStreamSnapshotInterval();
         mediaError.value = "WebSocket 连接失败，请检查服务地址或网络状态";
+        refreshMapTargetsFromVisibleDetections([]);
         pushFrontendLog("实时流连接异常", "error");
       };
       streamWs.onclose = () => {
@@ -1322,6 +2034,7 @@ const toggleStream = () => {
           idPrefix: "STREAM",
           timestampFallback: getLogTime(),
         });
+        refreshMapTargetsFromVisibleDetections([]);
         pushFrontendLog("实时流连接已关闭", "info");
       };
     } catch (e) {
@@ -1527,6 +2240,7 @@ const toggleVideoDetection = () => {
     });
     if (videoSyncInterval) clearInterval(videoSyncInterval);
     if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
+    refreshMapTargetsFromVisibleDetections([]);
     pushFrontendLog("已停止视频检测", "info");
     return;
   }
@@ -1584,6 +2298,9 @@ const toggleVideoDetection = () => {
 
     videoWs.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      if (Array.isArray(data.detections)) {
+        refreshMapTargetsFromVisibleDetections(data.detections);
+      }
       if (Array.isArray(data.detections) && data.detections.length > 0) {
         videoBuffer.push({
           ts: data.timestamp,
@@ -1600,6 +2317,7 @@ const toggleVideoDetection = () => {
     videoWs.onerror = () => {
       clearVideoSnapshotInterval();
       mediaError.value = "视频检测服务连接失败，请检查后端状态";
+      refreshMapTargetsFromVisibleDetections([]);
       pushFrontendLog("视频检测通道异常", "error");
     };
 
@@ -1613,6 +2331,7 @@ const toggleVideoDetection = () => {
       });
       if (videoSyncInterval) clearInterval(videoSyncInterval);
       if (videoAnimationId) cancelAnimationFrame(videoAnimationId);
+      refreshMapTargetsFromVisibleDetections([]);
       pushFrontendLog("视频检测通道已关闭", "info");
     };
   } catch (e) {
@@ -1722,9 +2441,86 @@ const onImageFileChange = (e) => {
     cacheImageFileForSession(file);
     clearCanvas();
     canvasDetections = [];
+    imageDetectionDone.value = false;
     imageSourceWidth.value = null;
     imageSourceHeight.value = null;
+    refreshMapTargetsFromVisibleDetections([]);
     pushFrontendLog(`已选择图片文件: ${file.name}`, "info");
+  }
+};
+
+const uploadDefaultLabelTxt = async () => {
+  const defaultTxtContent = DEFAULT_REFERENCE_TXT_CONTENT.endsWith("\n")
+    ? DEFAULT_REFERENCE_TXT_CONTENT
+    : `${DEFAULT_REFERENCE_TXT_CONTENT}\n`;
+  const labelBlob = new Blob([defaultTxtContent], { type: "text/plain" });
+  const labelForm = new FormData();
+  labelForm.append("files", labelBlob, DEFAULT_REFERENCE_TXT_FILE_NAME);
+  const labelRes = await fetch(`${httpBase.value}/detections/upload`, {
+    method: "POST",
+    body: labelForm,
+  });
+  if (!labelRes.ok) {
+    throw new Error("标准标注文件上传失败");
+  }
+};
+
+const ensureReferenceTxtForImageDetection = async () => {
+  const selectedTxt = txtFileEntry.value?.file;
+  if (!(selectedTxt instanceof File)) {
+    await uploadDefaultLabelTxt();
+    return "default_missing";
+  }
+
+  if (isTemplateTxtFileName(selectedTxt.name)) {
+    const signature = getTxtFileSignature(selectedTxt);
+    txtUploadState.value = "error";
+    txtUploadError.value = `当前 TXT 与模板文件重名，已改用默认参考文件 ${DEFAULT_REFERENCE_TXT_FILE_NAME}`;
+    txtFallbackSignature.value = signature;
+    await uploadDefaultLabelTxt();
+    return "default_template_name";
+  }
+
+  const signature = getTxtFileSignature(selectedTxt);
+  if (
+    signature &&
+    txtUploadState.value === "success" &&
+    txtUploadedSignature.value === signature
+  ) {
+    return "cached";
+  }
+
+  if (
+    signature &&
+    txtUploadState.value === "error" &&
+    txtFallbackSignature.value === signature
+  ) {
+    await uploadDefaultLabelTxt();
+    return "fallback";
+  }
+
+  txtUploadState.value = "uploading";
+  txtUploadError.value = "";
+  try {
+    const form = new FormData();
+    form.append("files", selectedTxt, selectedTxt.name || "reference.txt");
+    const response = await fetch(`${httpBase.value}/detections/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error("TXT 文件上传失败");
+    }
+    txtUploadedSignature.value = signature;
+    txtFallbackSignature.value = "";
+    txtUploadState.value = "success";
+    return "uploaded";
+  } catch (error) {
+    txtUploadState.value = "error";
+    txtUploadError.value = String(error?.message || "TXT 文件上传失败");
+    txtFallbackSignature.value = signature;
+    await uploadDefaultLabelTxt();
+    return "fallback";
   }
 };
 
@@ -1736,24 +2532,37 @@ const detectImage = async () => {
     pushFrontendLog("图片检测失败：网络不可用", "warning");
     return;
   }
+  const txtFallbackReason = resolveImageTxtFallbackReason();
+  if (txtFallbackReason) {
+    const confirmed = confirmContinueWithDefaultReferenceTxt();
+    if (!confirmed) {
+      pushFrontendLog("用户取消图片检测：参考 TXT 未上传或与模板重名", "info");
+      return;
+    }
+  }
   imageDetecting.value = true;
+  imageDetectionDone.value = false;
+  refreshMapTargetsFromVisibleDetections([]);
   pushFrontendLog(`开始图片检测: ${imageFile.value.name}`, "info");
   try {
-    // 1. 先自动上传同名标注 txt 文件
-    const imgBaseName = imageFile.value.name.replace(/\.[^.]+$/, "");
-    const labelBlob = new Blob([LABEL_CONTENT], { type: "text/plain" });
-    const labelFileName = `${imgBaseName}.txt`;
-
-    const labelForm = new FormData();
-    labelForm.append("files", labelBlob, labelFileName);
-
-    const labelRes = await fetch(`${httpBase.value}/detections/upload`, {
-      method: "POST",
-      body: labelForm,
-    });
-
-    if (!labelRes.ok) {
-      throw new Error("标注文件上传失败");
+    // 1. 上传/复用 TXT 参考文件（仅首次或更换文件时上传，失败则回退标准文件）
+    const txtUploadResult = await ensureReferenceTxtForImageDetection();
+    if (txtUploadResult === "uploaded") {
+      pushFrontendLog("TXT 参考文件上传成功", "success");
+    } else if (txtUploadResult === "cached") {
+      pushFrontendLog("复用已上传的 TXT 参考文件", "info");
+    } else if (txtUploadResult === "default_missing") {
+      pushFrontendLog(
+        `未上传参考 TXT，已改用默认文件 ${DEFAULT_REFERENCE_TXT_FILE_NAME}`,
+        "warning",
+      );
+    } else if (txtUploadResult === "default_template_name") {
+      pushFrontendLog(
+        `参考 TXT 与模板文件重名，已改用默认文件 ${DEFAULT_REFERENCE_TXT_FILE_NAME}`,
+        "warning",
+      );
+    } else if (txtUploadResult === "fallback") {
+      pushFrontendLog("TXT 文件异常，已回退到标准参考文件", "warning");
     }
 
     // 2. 再上传图片进行检测
@@ -1789,6 +2598,8 @@ const detectImage = async () => {
       idPrefix: "IMG",
       timestampFallback: getLogTime(),
     }).slice(0, 50);
+    imageDetectionDone.value = true;
+    refreshMapTargetsFromVisibleDetections(normalized.detections);
     detectionLoaded.value = true;
     pushFrontendLog(
       `图片检测完成，识别到 ${canvasDetections.length} 个目标`,
@@ -1802,6 +2613,8 @@ const detectImage = async () => {
       error.message === "Failed to fetch"
         ? "网络请求失败，请检查服务状态"
         : error.message;
+    imageDetectionDone.value = false;
+    refreshMapTargetsFromVisibleDetections([]);
     pushFrontendLog(`图片检测失败: ${error.message || "未知错误"}`, "error");
   } finally {
     imageDetecting.value = false;
@@ -1840,16 +2653,27 @@ const redrawCanvasForCurrentMode = () => {
 const handleResize = () => {
   viewportWidth.value = window.innerWidth;
   redrawCanvasForCurrentMode();
+  resizeDashboardMap();
 };
+
+watch(
+  () => [mapDronePos.value.lat, mapDronePos.value.lng, mapDronePos.value.yaw],
+  () => {
+    syncDashboardDroneMarker();
+    refreshMapTargetsFromVisibleDetections();
+  },
+);
 
 watch(confidence, () => {
   redrawCanvasForCurrentMode();
+  refreshMapTargetsFromVisibleDetections();
 });
 
 watch(
   enabledLabels,
   () => {
     redrawCanvasForCurrentMode();
+    refreshMapTargetsFromVisibleDetections();
   },
   { deep: true },
 );
@@ -1880,6 +2704,7 @@ const onFullscreenChange = () => {
 
 const handleRuntimeError = (event) => {
   const message = event?.message || "前端运行异常";
+  if (isIgnorableRuntimeErrorMessage(message)) return;
   pushFrontendLog(message, "error");
 };
 
@@ -1911,7 +2736,9 @@ onMounted(() => {
   viewportWidth.value = window.innerWidth;
   loadTaskSummaryFromStorage();
   restoreDashboardSessionState();
+  frontendLogs.value = sanitizeFrontendLogs(frontendLogs.value);
   ensureMediaSourceAfterActivate();
+  setTimeout(() => initDashboardMap(), 0);
   setTimeout(() => redrawCanvasForCurrentMode(), 0);
   window.addEventListener("error", handleRuntimeError);
   window.addEventListener("unhandledrejection", handleUnhandledRejection);
@@ -1924,6 +2751,7 @@ onActivated(() => {
   ensureMediaSourceAfterActivate();
   window.addEventListener("resize", handleResize);
   document.addEventListener("fullscreenchange", onFullscreenChange);
+  setTimeout(() => initDashboardMap(), 0);
   setTimeout(() => handleResize(), 0);
   startApiCheck();
   startDetectionPolling();
@@ -1932,6 +2760,8 @@ onActivated(() => {
 
 onDeactivated(() => {
   persistDashboardSessionState();
+  clearMapTelemetryDebounce();
+  abortMapTelemetryRequest();
   window.removeEventListener("resize", handleResize);
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   stopApiCheck();
@@ -1941,8 +2771,11 @@ onDeactivated(() => {
 
 onUnmounted(() => {
   persistDashboardSessionState();
+  clearMapTelemetryDebounce();
+  abortMapTelemetryRequest();
   clearStreamSnapshotInterval();
   clearVideoSnapshotInterval();
+  destroyDashboardMap();
   if (streamWs) streamWs.close();
   if (videoWs) videoWs.close();
   if (videoSyncInterval) clearInterval(videoSyncInterval);
@@ -2278,6 +3111,8 @@ const buildDashboardSessionState = () => ({
     activeCategoryNames: [...activeCategoryNames.value],
     startTime: startTime.value,
     endTime: endTime.value,
+    mapDronePos: { ...mapDronePos.value },
+    mapTelemetryDraft: { ...mapTelemetryDraft.value },
   },
   stream: {
     streamWsAddr: streamWsAddr.value,
@@ -2299,7 +3134,7 @@ const buildDashboardSessionState = () => ({
   tables: {
     realtimeDetections: [...realtimeDetections.value].slice(0, 50),
     canvasDetections: [...canvasDetections].slice(0, 300),
-    frontendLogs: [...frontendLogs.value].slice(0, DASHBOARD_LOG_LIMIT),
+    frontendLogs: sanitizeFrontendLogs(frontendLogs.value),
   },
   task: {
     selectedTaskId: selectedTaskId.value,
@@ -2377,6 +3212,33 @@ const restoreDashboardSessionState = () => {
     if (typeof uiState.endTime === "string") {
       endTime.value = uiState.endTime;
     }
+    if (uiState.mapDronePos && typeof uiState.mapDronePos === "object") {
+      const lat = Number(uiState.mapDronePos.lat);
+      const lng = Number(uiState.mapDronePos.lng);
+      const yaw = Number(uiState.mapDronePos.yaw);
+      if (
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        Number.isFinite(yaw) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180 &&
+        yaw >= 0 &&
+        yaw <= 360
+      ) {
+        mapDronePos.value = { lat, lng, yaw };
+      }
+    }
+    if (uiState.mapTelemetryDraft && typeof uiState.mapTelemetryDraft === "object") {
+      mapTelemetryDraft.value = {
+        lat: String(uiState.mapTelemetryDraft.lat ?? mapTelemetryDraft.value.lat),
+        lng: String(uiState.mapTelemetryDraft.lng ?? mapTelemetryDraft.value.lng),
+        yaw: String(uiState.mapTelemetryDraft.yaw ?? mapTelemetryDraft.value.yaw),
+      };
+    } else {
+      syncMapTelemetryDraftFromPos();
+    }
     if (Array.isArray(uiState.activeCategoryNames)) {
       const restoredNames = uiState.activeCategoryNames.filter(
         (name) => typeof name === "string" && name.trim(),
@@ -2420,7 +3282,7 @@ const restoreDashboardSessionState = () => {
       canvasDetections = tableState.canvasDetections.slice(0, 300);
     }
     if (Array.isArray(tableState.frontendLogs)) {
-      frontendLogs.value = tableState.frontendLogs.slice(0, DASHBOARD_LOG_LIMIT);
+      frontendLogs.value = sanitizeFrontendLogs(tableState.frontendLogs);
     }
     if (!detectionLoaded.value && realtimeDetections.value.length > 0) {
       detectionLoaded.value = true;
@@ -2484,6 +3346,12 @@ watch(
     imageSourceWidth,
     imageSourceHeight,
     selectedTaskId,
+    () => mapDronePos.value.lat,
+    () => mapDronePos.value.lng,
+    () => mapDronePos.value.yaw,
+    () => mapTelemetryDraft.value.lat,
+    () => mapTelemetryDraft.value.lng,
+    () => mapTelemetryDraft.value.yaw,
   ],
   () => {
     schedulePersistDashboardSessionState();
@@ -2520,6 +3388,7 @@ watch(
   },
   { deep: true },
 );
+
 </script>
 
 <template>
@@ -2914,101 +3783,89 @@ watch(
       <!-- Right Column: Functional Control Area (35%) -->
       <div class="control-section">
         <div class="control-grid">
-          <!-- Module 1: System Control & Status -->
-          <div class="dashboard-card control-module" style="flex: 0 0 auto">
+          <!-- Module 1: Target Map (Moved from Auxiliary Section) -->
+          <div
+            class="dashboard-card stats-module-large dashboard-map-module"
+            style="flex: 0 0 auto; grid-column: span 2"
+          >
             <div class="module-header">
-              <h4>系统控制</h4>
-              <div class="status-indicator">
-                <span :class="['led', systemStatus]"></span>
-                {{ systemStatus === "running" ? "运行中" : "已停止" }}
-              </div>
-            </div>
-            <div class="control-actions">
-              <button
-                :class="[
-                  'action-btn',
-                  systemStatus === 'running' ? 'danger' : 'success',
-                ]"
-                @click="
-                  systemStatus =
-                    systemStatus === 'running' ? 'stopped' : 'running'
-                "
+              <h4>目标定位地图</h4>
+              <span
+                class="map-status-pill"
+                :class="{
+                  ready: mapReady && !mapLoading && !mapError,
+                  loading: mapLoading,
+                  error: !!mapError,
+                }"
               >
-                {{ systemStatus === "running" ? "停止检测" : "开始检测" }}
-              </button>
-              <button class="action-btn">重启服务</button>
+                {{
+                  mapError
+                    ? "不可用"
+                    : mapLoading
+                      ? "加载中..."
+                      : mapReady
+                        ? "在线"
+                        : "待初始化"
+                }}
+              </span>
             </div>
-            <div class="slider-group">
-              <label class="slider-field compact">
-                <div class="slider-head">
-                  <span>置信度</span>
-                  <strong>{{ confidence.toFixed(2) }}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0.05"
-                  max="0.99"
-                  step="0.01"
-                  v-model.number="confidence"
-                />
-              </label>
-              <label class="slider-field compact">
-                <div class="slider-head">
-                  <span>IoU 阈值</span>
-                  <strong>{{ iou.toFixed(2) }}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0.2"
-                  max="0.9"
-                  step="0.01"
-                  v-model.number="iou"
-                />
-              </label>
-            </div>
-          </div>
-
-          <!-- Module 2: Category Filter (Tree) -->
-          <div class="dashboard-card filter-module" style="flex: 0 0 auto">
-            <div class="module-header">
-              <h4>目标类别筛选</h4>
-            </div>
-            <div class="tree-filter">
-              <div class="tree-node root">
-                <div class="node-content">
-                  <label class="tree-all-toggle">
-                    <input
-                      type="checkbox"
-                      :checked="isAllCategoriesSelected"
-                      :indeterminate.prop="isCategoryIndeterminate"
-                      @change="toggleAllCategories"
-                    />
-                    <span class="folder-icon">📁</span>
-                    <span>全选类别</span>
-                  </label>
-                  <span class="tree-selected-count">
-                    {{ selectedCategoryCount }}/{{ categoryOptions.length }}
-                  </span>
-                </div>
-                <div class="tree-children">
-                  <label
-                    v-for="opt in categoryOptions"
-                    :key="opt.key"
-                    class="tree-item"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="enabledLabels.includes(opt.key)"
-                      @change="toggleLabel(opt.key)"
-                    />
-                    <span
-                      class="color-dot"
-                      :style="{ background: opt.color }"
-                    ></span>
-                    {{ opt.label }}
-                  </label>
-                </div>
+            <div class="dashboard-map-shell">
+              <div ref="mapContainerRef" class="dashboard-map-canvas"></div>
+              <div
+                v-if="mapLoading || mapError || !mapReady"
+                class="dashboard-map-overlay"
+              >
+                <span>{{
+                  mapError || (mapLoading ? "地图加载中..." : "等待地图初始化...")
+                }}</span>
               </div>
+              <span class="dashboard-map-badge">AMap V2.0</span>
+            </div>
+            <div class="dashboard-map-metrics">
+              <div class="dashboard-map-metric">
+                <span>纬度</span>
+                <input
+                  v-model="mapTelemetryDraft.lat"
+                  class="dashboard-map-metric-input"
+                  inputmode="decimal"
+                  type="text"
+                  @input="onMapTelemetryInput"
+                  @blur="onMapTelemetryBlur"
+                />
+              </div>
+              <div class="dashboard-map-metric">
+                <span>经度</span>
+                <input
+                  v-model="mapTelemetryDraft.lng"
+                  class="dashboard-map-metric-input"
+                  inputmode="decimal"
+                  type="text"
+                  @input="onMapTelemetryInput"
+                  @blur="onMapTelemetryBlur"
+                />
+              </div>
+              <div class="dashboard-map-metric">
+                <span>航向</span>
+                <input
+                  v-model="mapTelemetryDraft.yaw"
+                  class="dashboard-map-metric-input"
+                  inputmode="decimal"
+                  type="text"
+                  @input="onMapTelemetryInput"
+                  @blur="onMapTelemetryBlur"
+                />
+              </div>
+            </div>
+            <div
+              v-if="mapTelemetrySyncState === 'syncing' || mapTelemetryMessage"
+              class="dashboard-map-sync-tip"
+              :class="{ error: mapTelemetrySyncState === 'error' }"
+            >
+              {{
+                mapTelemetrySyncState === "syncing"
+                  ? "地图参数同步中..."
+                  : mapTelemetryMessage
+              }}
             </div>
           </div>
 
@@ -3182,7 +4039,11 @@ watch(
                 :disabled="screenshotInProgress"
                 @click="captureStageScreenshot"
               >{{ screenshotInProgress ? "截图中..." : "截图" }}</button>
-              <button class="tool-btn" title="录屏">录屏</button>
+              <button
+                class="tool-btn"
+                title="上传TXT"
+                @click="openTxtUploadDialog"
+              >上传TXT</button>
               <button class="tool-btn" title="设置">设置</button>
             </div>
           </div>
@@ -3213,116 +4074,99 @@ watch(
 
       <!-- Auxiliary Section -->
       <div class="auxiliary-section">
-        <div class="dashboard-card stats-module-large" style="flex: 0 0 auto">
+        <!-- Module 1: System Control & Status (Moved from Control Section) -->
+        <div class="dashboard-card control-module" style="flex: 0 0 auto">
           <div class="module-header">
-            <h4>目标统计分布</h4>
-          </div>
-          <div class="stats-top">
-            <div class="stats-chart-card">
-              <div class="stats-chart-title">
-                <span>完成率</span>
-                <strong>{{ completionRateText }}</strong>
-              </div>
-              <div
-                class="pie-chart-wrapper"
-                @mouseleave="hoveredCompletion = null"
-              >
-                <svg viewBox="0 0 32 32" class="pie-svg">
-                  <path
-                    v-for="segment in completionSegments"
-                    :key="segment.name"
-                    :d="segment.path"
-                    :fill="segment.color"
-                    stroke="var(--bg-panel)"
-                    stroke-width="0.6"
-                    @mouseenter="hoveredCompletion = segment"
-                  />
-                  <circle cx="16" cy="16" r="10" fill="var(--bg-panel)" />
-                </svg>
-                <div class="pie-center-text">
-                  <strong>{{ completionRateText }}</strong>
-                  <small>完成率</small>
-                </div>
-                <div v-if="hoveredCompletion" class="pie-tooltip">
-                  <strong>{{ hoveredCompletion.name }}</strong>
-                  <span>{{ hoveredCompletion.percentage }}%</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="stats-chart-card">
-              <div class="stats-chart-title">
-                <span>分类占比</span>
-                <strong>{{ onlineTargetText === "--" ? "--" : onlineTargetText + "个" }}</strong>
-              </div>
-              <div
-                class="pie-chart-wrapper"
-                @mouseleave="hoveredCategory = null"
-              >
-                <svg viewBox="0 0 32 32" class="pie-svg">
-                  <path
-                    v-for="segment in categorySegments"
-                    :key="segment.name"
-                    :d="segment.path"
-                    :fill="segment.color"
-                    stroke="var(--bg-panel)"
-                    stroke-width="0.6"
-                    @mouseenter="hoveredCategory = segment"
-                  />
-                  <circle cx="16" cy="16" r="10" fill="var(--bg-panel)" />
-                </svg>
-                <div class="pie-center-text">
-                  <strong>{{ onlineTargetText }}</strong>
-                  <small>目标数</small>
-                </div>
-                <div v-if="hoveredCategory" class="pie-tooltip">
-                  <strong>{{ hoveredCategory.name }}</strong>
-                  <span
-                    >{{ hoveredCategory.value }} /
-                    {{ hoveredCategory.percentage }}%</span
-                  >
-                </div>
-              </div>
-              <div class="stats-legend">
-                <button
-                  v-for="item in categoryDetailList"
-                  :key="item.name"
-                  class="legend-row"
-                  :class="{ muted: !activeCategoryNames.includes(item.name) }"
-                  @click="toggleCategoryLegend(item.name)"
-                  @mouseenter="setCategoryHover(item.name)"
-                  @mouseleave="hoveredCategory = null"
-                >
-                  <span
-                    class="legend-dot"
-                    :style="{ background: item.color }"
-                  ></span>
-                  <span class="legend-name">{{ item.name }}</span>
-                  <span class="legend-val">{{ item.value }}</span>
-                  <span class="legend-pct">切换</span>
-                </button>
-              </div>
+            <h4>系统控制</h4>
+            <div class="status-indicator">
+              <span :class="['led', systemStatus]"></span>
+              {{ systemStatus === "running" ? "运行中" : "已停止" }}
             </div>
           </div>
-
-          <div class="stats-detail-list">
-            <div
-              v-for="item in categoryDetailList"
-              :key="item.name"
-              class="stats-detail-row"
+          <div class="control-actions">
+            <button
+              :class="[
+                'action-btn',
+                systemStatus === 'running' ? 'danger' : 'success',
+              ]"
+              @click="
+                systemStatus =
+                  systemStatus === 'running' ? 'stopped' : 'running'
+              "
             >
-              <div class="stats-detail-head">
-                <span
-                  class="legend-dot"
-                  :style="{ background: item.color }"
-                ></span>
-                <strong>{{ item.name }}</strong>
+              {{ systemStatus === "running" ? "停止检测" : "开始检测" }}
+            </button>
+            <button class="action-btn">重启服务</button>
+          </div>
+          <div class="slider-group">
+            <label class="slider-field compact">
+              <div class="slider-head">
+                <span>置信度</span>
+                <strong>{{ confidence.toFixed(2) }}</strong>
               </div>
-              <div class="stats-detail-meta">
-                <span>目标 {{ item.value ?? "--" }}</span>
-                <span>P {{ displayPercent(item.precision) }}</span>
-                <span>R {{ displayPercent(item.recall) }}</span>
-                <span>F1 {{ displayPercent(item.f1) }}</span>
+              <input
+                type="range"
+                min="0.05"
+                max="0.99"
+                step="0.01"
+                v-model.number="confidence"
+              />
+            </label>
+            <label class="slider-field compact">
+              <div class="slider-head">
+                <span>IoU 阈值</span>
+                <strong>{{ iou.toFixed(2) }}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.2"
+                max="0.9"
+                step="0.01"
+                v-model.number="iou"
+              />
+            </label>
+          </div>
+        </div>
+
+        <!-- Module 2: Category Filter (Tree) (Moved from Control Section) -->
+        <div class="dashboard-card filter-module" style="flex: 0 0 auto">
+          <div class="module-header">
+            <h4>目标类别筛选</h4>
+          </div>
+          <div class="tree-filter">
+            <div class="tree-node root">
+              <div class="node-content">
+                <label class="tree-all-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="isAllCategoriesSelected"
+                    :indeterminate.prop="isCategoryIndeterminate"
+                    @change="toggleAllCategories"
+                  />
+                  <span class="folder-icon">📁</span>
+                  <span>全选类别</span>
+                </label>
+                <span class="tree-selected-count">
+                  {{ selectedCategoryCount }}/{{ categoryOptions.length }}
+                </span>
+              </div>
+              <div class="tree-children">
+                <label
+                  v-for="opt in categoryOptions"
+                  :key="opt.key"
+                  class="tree-item"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="enabledLabels.includes(opt.key)"
+                    @change="toggleLabel(opt.key)"
+                  />
+                  <span
+                    class="color-dot"
+                    :style="{ background: opt.color }"
+                  ></span>
+                  {{ opt.label }}
+                </label>
               </div>
             </div>
           </div>
@@ -3441,6 +4285,98 @@ watch(
                 :disabled="!quickTaskName.trim() || !quickTaskScene || !quickTaskSource.trim()"
                 @click="confirmQuickCreateTask"
               >确认创建</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </teleport>
+
+    <teleport to="body">
+      <div
+        v-if="txtUploadDialogVisible"
+        class="dashboard-task-dialog-overlay"
+        @click.self="closeTxtUploadDialog"
+      >
+        <div class="dashboard-task-dialog dashboard-txt-upload-dialog">
+          <div class="dashboard-task-dialog-header">
+            <h4>上传 TXT 文件</h4>
+            <button
+              type="button"
+              class="dashboard-task-dialog-close"
+              @click="closeTxtUploadDialog"
+            >&times;</button>
+          </div>
+          <div class="dashboard-task-dialog-body">
+            <p class="dashboard-txt-upload-tip">
+              该文件将作为图片检测时服务器端参考的标准文件，用于对比实时检测结果与标准检测结果的差异，请该txt文件格式参考我们的标准文件格式，确认无误后再进行上传，若有格式错误或其他错误将应用我们的标准文件进行检测，引起的误差后果自负
+            </p>
+
+            <input
+              ref="txtUploadInputRef"
+              type="file"
+              accept=".txt,text/plain"
+              class="dashboard-txt-upload-input"
+              @change="onTxtFileInputChange"
+            />
+
+            <div
+              class="dashboard-txt-dropzone"
+              :class="{ active: txtDropActive }"
+              @click="triggerTxtFilePicker"
+              @dragenter.prevent="onTxtDropzoneDragEnter"
+              @dragover.prevent="onTxtDropzoneDragOver"
+              @dragleave.prevent="onTxtDropzoneDragLeave"
+              @drop="onTxtDropzoneDrop"
+            >
+              <div class="dashboard-txt-dropzone-content">
+                <strong>点击或拖拽 TXT 文件到此处</strong>
+                <small>仅支持单个 .txt 文件，重新添加将替换已有文件</small>
+              </div>
+            </div>
+
+            <div v-if="txtFileEntry" class="dashboard-txt-file-list">
+              <div class="dashboard-txt-file-row">
+                <div class="dashboard-txt-file-meta">
+                  <strong>{{ txtFileEntry.name }}</strong>
+                  <span>{{ formatTxtFileSize(txtFileEntry.size) }}</span>
+                </div>
+                <button
+                  type="button"
+                  class="dashboard-task-btn"
+                  @click="removeTxtFile"
+                >移除</button>
+              </div>
+            </div>
+
+            <div v-if="txtFileEntry" class="dashboard-txt-upload-status">
+              <span :class="['dashboard-txt-upload-dot', txtUploadState]"></span>
+              <span v-if="txtUploadState === 'success'">参考 TXT 已上传，可直接进行图片检测</span>
+              <span v-else-if="txtUploadState === 'uploading'">正在上传 TXT 文件...</span>
+              <span v-else-if="txtUploadState === 'error'">{{ txtUploadError || 'TXT 文件上传失败' }}</span>
+              <span v-else>已选择 TXT，图片检测时会自动上传</span>
+            </div>
+          </div>
+          <div class="dashboard-task-dialog-footer">
+            <div class="dashboard-task-tip">
+              当前已选择 {{ txtFileEntry ? 1 : 0 }} 个 TXT 文件。
+            </div>
+            <div class="dashboard-task-dialog-actions">
+              <button
+                type="button"
+                class="dashboard-task-btn"
+                @click="downloadTxtTemplateAssets"
+              >下载模板代码</button>
+              <button
+                type="button"
+                class="dashboard-task-btn"
+                :disabled="!txtFileEntry"
+                @click="clearTxtFiles"
+              >清空列表</button>
+              <button
+                type="button"
+                class="dashboard-task-btn primary"
+                @click="closeTxtUploadDialog"
+              >完成</button>
             </div>
           </div>
         </div>

@@ -345,6 +345,187 @@ describe("DashboardView", () => {
     expect(wrapper.vm.uploadState).toBe("uploading"); // Or paused depending on how we called it, let's just check it doesn't succeed
   });
 
+  it("falls back to dv_ir_00001.txt when no txt is uploaded and user confirms", async () => {
+    const wrapper = mount(DashboardView);
+    const imageFile = new File(["mock-image"], "scene.jpg", {
+      type: "image/jpeg",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = vi.fn((url) => {
+      if (String(url).includes("/detections/upload")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({}),
+        });
+      }
+      if (String(url).includes("/detections/image")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+    global.fetch = fetchMock;
+    wrapper.vm.imageFile = imageFile;
+    await wrapper.vm.$nextTick();
+    fetchMock.mockClear();
+
+    await wrapper.vm.detectImage();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toContain("当前文件未上传或者和模板文件重名");
+
+    const uploadCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/detections/upload"),
+    );
+    expect(uploadCall).toBeTruthy();
+    const uploadedFile = uploadCall[1].body.get("files");
+    expect(uploadedFile.name).toBe("dv_ir_00001.txt");
+
+    const imageCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/detections/image"),
+    );
+    expect(imageCalls.length).toBe(1);
+    confirmSpy.mockRestore();
+  });
+
+  it("falls back to dv_ir_00001.txt when uploaded txt has template filename", async () => {
+    const wrapper = mount(DashboardView);
+    const imageFile = new File(["mock-image"], "scene-2.jpg", {
+      type: "image/jpeg",
+    });
+    const templateNameTxt = new File(["custom"], "模板文件.txt", {
+      type: "text/plain",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = vi.fn((url) => {
+      if (String(url).includes("/detections/upload")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({}),
+        });
+      }
+      if (String(url).includes("/detections/image")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+    global.fetch = fetchMock;
+    wrapper.vm.txtFileEntry = {
+      id: "txt-1",
+      name: templateNameTxt.name,
+      size: templateNameTxt.size,
+      lastModified: templateNameTxt.lastModified,
+      file: templateNameTxt,
+    };
+    wrapper.vm.imageFile = imageFile;
+    await wrapper.vm.$nextTick();
+    fetchMock.mockClear();
+
+    await wrapper.vm.detectImage();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const uploadCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/detections/upload"),
+    );
+    expect(uploadCall).toBeTruthy();
+    const uploadedFile = uploadCall[1].body.get("files");
+    expect(uploadedFile.name).toBe("dv_ir_00001.txt");
+    confirmSpy.mockRestore();
+  });
+
+  it("cancels image detection when user rejects fallback confirmation", async () => {
+    const wrapper = mount(DashboardView);
+    const imageFile = new File(["mock-image"], "scene-3.jpg", {
+      type: "image/jpeg",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      }),
+    );
+    global.fetch = fetchMock;
+    wrapper.vm.imageFile = imageFile;
+    await wrapper.vm.$nextTick();
+    fetchMock.mockClear();
+
+    await wrapper.vm.detectImage();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(wrapper.vm.imageDetecting).toBe(false);
+    confirmSpy.mockRestore();
+  });
+
+  it("debounces map telemetry input and sends latest payload to backend", async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(DashboardView);
+    const fetchMock = vi.fn((url, options = {}) => {
+      if (String(url).includes("/map/telemetry")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+    global.fetch = fetchMock;
+
+    wrapper.vm.mapTelemetryDraft = {
+      ...wrapper.vm.mapTelemetryDraft,
+      lat: "39.90500",
+      lng: "116.40800",
+      yaw: "38",
+    };
+    wrapper.vm.onMapTelemetryInput();
+    wrapper.vm.mapTelemetryDraft = {
+      ...wrapper.vm.mapTelemetryDraft,
+      yaw: "42",
+    };
+    wrapper.vm.onMapTelemetryInput();
+    wrapper.vm.mapTelemetryDraft = {
+      ...wrapper.vm.mapTelemetryDraft,
+      yaw: "45",
+    };
+    wrapper.vm.onMapTelemetryInput();
+
+    const telemetryCallsBeforeDebounce = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/map/telemetry"),
+    );
+    expect(telemetryCallsBeforeDebounce.length).toBe(0);
+
+    vi.advanceTimersByTime(500);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const telemetryCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/map/telemetry"),
+    );
+    expect(telemetryCalls.length).toBe(1);
+    const sentBody = JSON.parse(telemetryCalls[0][1].body);
+    expect(sentBody.lat).toBe(39.905);
+    expect(sentBody.lng).toBe(116.408);
+    expect(sentBody.yaw).toBe(45);
+
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+
   it("sends task payload and periodic snapshot command for stream websocket", async () => {
     vi.useFakeTimers();
     const originalWebSocket = global.WebSocket;

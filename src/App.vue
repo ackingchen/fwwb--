@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  nextTick,
   ref,
   watch,
   onMounted,
@@ -12,6 +13,11 @@ import { useDataStore } from "./stores/useDataStore";
 import { useConfigStore } from "./stores/useConfigStore";
 import { storeToRefs } from "pinia";
 import AiAssistant from "./components/AiAssistant.vue";
+import {
+  AUTH_SESSION_KEY,
+  clearAuthSession,
+  getAuthSession,
+} from "./utils/auth";
 
 const route = useRoute();
 const router = useRouter();
@@ -40,7 +46,9 @@ const tabs = [
   { key: "settings", label: "配置", icon: "gear", path: "/settings" },
 ];
 
+const isAuthRoute = computed(() => route.name === "auth");
 const activeTab = computed(() => route.name || "dashboard");
+const authUsername = ref("");
 
 function navigate(key) {
   router.push({ name: key });
@@ -52,6 +60,41 @@ function updatePadding() {
   if (!headerRef.value) return;
   const height = headerRef.value.offsetHeight;
   contentPaddingTop.value = `${height + 24}px`;
+}
+
+function refreshAuthUser() {
+  authUsername.value = getAuthSession()?.username || "";
+}
+
+function startObserveHeader() {
+  if (!headerRef.value || resizeObserver) return;
+  resizeObserver = new ResizeObserver(() => {
+    updatePadding();
+  });
+  resizeObserver.observe(headerRef.value);
+}
+
+function stopObserveHeader() {
+  if (!resizeObserver) return;
+  resizeObserver.disconnect();
+  resizeObserver = null;
+}
+
+function setupHeaderLayout() {
+  updatePadding();
+  stopObserveHeader();
+  startObserveHeader();
+}
+
+function handleStorageSync(event) {
+  if (event?.key && event.key !== AUTH_SESSION_KEY) return;
+  refreshAuthUser();
+}
+
+function logout() {
+  clearAuthSession();
+  refreshAuthUser();
+  router.replace({ name: "auth" });
 }
 
 const hasError = ref(false);
@@ -76,28 +119,49 @@ onErrorCaptured((err, instance, info) => {
 });
 
 onMounted(() => {
-  updatePadding();
-
-  if (headerRef.value) {
-    resizeObserver = new ResizeObserver(() => {
-      updatePadding();
-    });
-    resizeObserver.observe(headerRef.value);
+  refreshAuthUser();
+  if (!isAuthRoute.value) {
+    setupHeaderLayout();
   }
-
   window.addEventListener("resize", updatePadding);
+  window.addEventListener("storage", handleStorageSync);
 });
 
 onUnmounted(() => {
-  if (resizeObserver) {
-    resizeObserver.disconnect();
-  }
+  stopObserveHeader();
   window.removeEventListener("resize", updatePadding);
+  window.removeEventListener("storage", handleStorageSync);
 });
+
+watch(
+  () => route.fullPath,
+  () => {
+    refreshAuthUser();
+  },
+  { immediate: true },
+);
+
+watch(
+  isAuthRoute,
+  (authRoute) => {
+    if (authRoute) {
+      stopObserveHeader();
+      return;
+    }
+    nextTick(() => {
+      setupHeaderLayout();
+    });
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
-  <div class="app-shell">
+  <div v-if="isAuthRoute" class="auth-route-shell">
+    <router-view />
+  </div>
+
+  <div v-else class="app-shell">
     <header class="fixed-header" ref="headerRef">
       <div class="header-left">
         <div class="brand-block">
@@ -132,6 +196,10 @@ onUnmounted(() => {
           <span v-if="theme === 'dark'">&#9790;</span>
           <span v-else>&#9728;</span>
         </button>
+        <div class="header-user-block">
+          <span class="user-chip">{{ authUsername || "已登录用户" }}</span>
+          <button class="logout-btn" @click="logout">退出登录</button>
+        </div>
         <div class="topbar-status">
           <span class="status-dot"></span>
           <span>系统状态: 运行中</span>
@@ -228,5 +296,51 @@ onUnmounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.auth-route-shell {
+  min-height: 100vh;
+}
+
+.header-user-block {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 10px;
+}
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--status-border);
+  background: var(--status-bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.logout-btn {
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  padding: 0 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.logout-btn:hover {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+@media (max-width: 768px) {
+  .header-user-block {
+    margin-right: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 </style>
