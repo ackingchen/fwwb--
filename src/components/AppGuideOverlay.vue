@@ -39,13 +39,20 @@ function updateViewport() {
   viewportHeight.value = window.innerHeight;
 }
 
+const spotlightPadding = computed(() => {
+  const configured = Number(props.step?.spotlightPadding);
+  if (!Number.isFinite(configured)) return SPOTLIGHT_PADDING;
+  return clamp(Math.round(configured), 0, 64);
+});
+
 const holeRect = computed(() => {
   const rect = props.targetRect;
   if (!rect) return null;
-  const left = clamp(rect.left - SPOTLIGHT_PADDING, 0, viewportWidth.value);
-  const top = clamp(rect.top - SPOTLIGHT_PADDING, 0, viewportHeight.value);
-  const right = clamp(rect.left + rect.width + SPOTLIGHT_PADDING, 0, viewportWidth.value);
-  const bottom = clamp(rect.top + rect.height + SPOTLIGHT_PADDING, 0, viewportHeight.value);
+  const padding = spotlightPadding.value;
+  const left = clamp(rect.left - padding, 0, viewportWidth.value);
+  const top = clamp(rect.top - padding, 0, viewportHeight.value);
+  const right = clamp(rect.left + rect.width + padding, 0, viewportWidth.value);
+  const bottom = clamp(rect.top + rect.height + padding, 0, viewportHeight.value);
   const width = Math.max(0, right - left);
   const height = Math.max(0, bottom - top);
   if (width === 0 || height === 0) return null;

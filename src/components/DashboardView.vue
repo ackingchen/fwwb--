@@ -17,8 +17,17 @@ import defaultReferenceTxtRaw from "../../dv_ir_00001.txt?raw";
 const configStore = useConfigStore();
 const dataStore = useDataStore();
 
-const { confidence, iou, selectedModel, enabledLabels, backendIp, httpBase, wsBase, selectedTaskId } =
-  storeToRefs(configStore);
+const {
+  confidence,
+  iou,
+  selectedModel,
+  enabledLabels,
+  backendIp,
+  httpBase,
+  wsBase,
+  selectedTaskId,
+  streamRtspUrl: savedStreamRtspUrl,
+} = storeToRefs(configStore);
 const {
   detections: globalDetections,
   filteredDetections: detections,
@@ -606,6 +615,49 @@ const isDetectionCategoryEnabled = (item = {}) => {
   return enabledLabels.value.includes(key);
 };
 
+const DEFAULT_DETECTION_COLOR = "#00ff88";
+const DETECTION_FALLBACK_COLORS = [
+  "#66b3ff",
+  "#ff7b7b",
+  "#61d9e8",
+  "#f6cf68",
+  "#8bd450",
+  "#a56af5",
+  "#5fd1aa",
+];
+
+const toRgba = (hexColor, alpha = 1) => {
+  const hex = String(hexColor ?? "").trim().replace("#", "");
+  if (!/^[\da-fA-F]{3}$|^[\da-fA-F]{6}$/.test(hex)) {
+    return `rgba(0, 255, 136, ${alpha})`;
+  }
+  const fullHex =
+    hex.length === 3
+      ? hex
+          .split("")
+          .map((ch) => ch + ch)
+          .join("")
+      : hex;
+  const r = parseInt(fullHex.slice(0, 2), 16);
+  const g = parseInt(fullHex.slice(2, 4), 16);
+  const b = parseInt(fullHex.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const pickDetectionColor = (item, index) => {
+  const key = resolveDetectionLabelKey(item);
+  const mapped = key ? CATEGORY_OPTION_MAP[key]?.color : "";
+  if (mapped) return mapped;
+  const label = normalizeDetectionLabel(item, index);
+  const seed = String(label ?? "").trim();
+  if (!seed) return DEFAULT_DETECTION_COLOR;
+  const hash = Array.from(seed).reduce(
+    (sum, ch) => (sum + ch.charCodeAt(0)) % DETECTION_FALLBACK_COLORS.length,
+    0,
+  );
+  return DETECTION_FALLBACK_COLORS[hash] || DEFAULT_DETECTION_COLOR;
+};
+
 const toNumberOrUndefined = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : undefined;
@@ -1029,13 +1081,37 @@ const activeMode = ref("stream"); // 'stream', 'video', 'image'
 const detectCanvas = ref(null);
 
 // Mode: Stream
-const streamWsAddr = ref(`ws://${backendIp.value}/stream-detect`);
-const streamRtspUrl = ref("");
+const getDefaultStreamWsAddr = (ip = backendIp.value) => `ws://${ip}/stream-detect`;
+const isDefaultStreamWsAddrPattern = (value) =>
+  /^wss?:\/\/[^/]+\/stream-detect\/?$/i.test(String(value ?? "").trim());
+const streamWsAddr = ref(getDefaultStreamWsAddr(backendIp.value));
+const streamRtspUrl = ref(savedStreamRtspUrl.value || "");
 const streamConnected = ref(false);
 const streamBase64 = ref("");
 const streamImg = ref(null);
 let streamWs = null;
 let streamSnapshotInterval = null;
+const lastAutoStreamWsAddr = ref(streamWsAddr.value);
+
+const syncStreamWsAddrWithBackendIp = (nextIp = backendIp.value) => {
+  const nextAutoAddr = getDefaultStreamWsAddr(nextIp);
+  const currentAddr = String(streamWsAddr.value ?? "").trim();
+  // Only overwrite if current value is auto-generated or still default-like.
+  if (
+    !currentAddr ||
+    currentAddr === String(lastAutoStreamWsAddr.value ?? "").trim() ||
+    isDefaultStreamWsAddrPattern(currentAddr)
+  ) {
+    streamWsAddr.value = nextAutoAddr;
+  }
+  lastAutoStreamWsAddr.value = nextAutoAddr;
+};
+
+const rememberStreamRtspAddress = () => {
+  const trimmed = String(streamRtspUrl.value ?? "").trim();
+  if (!trimmed) return;
+  configStore.setStreamRtspUrl(trimmed, { saveHistory: true });
+};
 
 // Mode: Video
 const videoFile = ref(null);
@@ -1743,8 +1819,10 @@ const renderDetectionsOnContext = (
     const h = (y2 - y1) * scaleY;
     const lx = x1 * scaleX + offsetX;
     const ly = y1 * scaleY + offsetY;
+    const detectionColor = pickDetectionColor(det, index);
+    const labelFillColor = toRgba(detectionColor, 0.86);
 
-    ctx.strokeStyle = "#00ff88";
+    ctx.strokeStyle = detectionColor;
     ctx.lineWidth = 2;
     ctx.strokeRect(lx, ly, w, h);
 
@@ -1769,10 +1847,10 @@ const renderDetectionsOnContext = (
     ctx.font = "bold 14px Arial";
     const textWidth = ctx.measureText(label).width;
 
-    ctx.fillStyle = "rgba(0, 255, 136, 0.85)";
+    ctx.fillStyle = labelFillColor;
     ctx.fillRect(lx, ly - 22, textWidth + 10, 22);
 
-    ctx.fillStyle = "#000";
+    ctx.fillStyle = "#071521";
     ctx.fillText(label, lx + 5, ly - 6);
   });
 };
@@ -2012,21 +2090,6 @@ const clearVideoSnapshotInterval = () => {
 
 const startStreamSnapshotInterval = () => {
   clearStreamSnapshotInterval();
-  streamSnapshotInterval = setInterval(() => {
-    if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
-    const taskPayload = resolveWsTaskPayload("stream");
-    streamWs.send(
-      JSON.stringify({
-        command: "snapshot",
-        url: streamRtspUrl.value,
-        taskName: taskPayload.taskName,
-        taskType: taskPayload.taskType,
-        taskTypeLabel: taskPayload.taskTypeLabel,
-        scene: taskPayload.scene,
-        scence: taskPayload.scence,
-      }),
-    );
-  }, WS_SNAPSHOT_INTERVAL_MS);
 };
 
 const startVideoSnapshotInterval = () => {
@@ -2068,6 +2131,7 @@ const toggleStream = () => {
       streamWs.onopen = () => {
         streamConnected.value = true;
         mediaError.value = "";
+        configStore.setStreamRtspUrl(streamRtspUrl.value, { saveHistory: true });
         const taskPayload = resolveWsTaskPayload("stream");
         streamWs.send(
           JSON.stringify({
@@ -2079,7 +2143,6 @@ const toggleStream = () => {
             scence: taskPayload.scence,
           }),
         );
-        startStreamSnapshotInterval();
         pushFrontendLog("实时流连接成功", "success");
       };
       streamWs.onmessage = (event) => {
@@ -2771,6 +2834,23 @@ watch(httpBase, () => {
   if (resourceTimer) {
     fetchSystemResources();
   }
+});
+
+watch(
+  backendIp,
+  (nextIp) => {
+    syncStreamWsAddrWithBackendIp(nextIp);
+  },
+);
+
+watch(streamRtspUrl, (nextUrl) => {
+  configStore.setStreamRtspUrl(nextUrl, { saveHistory: false });
+});
+
+watch(savedStreamRtspUrl, (nextUrl) => {
+  const normalized = String(nextUrl ?? "").trim();
+  if (normalized === String(streamRtspUrl.value ?? "").trim()) return;
+  streamRtspUrl.value = normalized;
 });
 
 // --- Fullscreen ---
@@ -4000,6 +4080,7 @@ watch(
                   v-model="streamRtspUrl"
                   class="control-input"
                   placeholder="RTSP 源"
+                  @blur="rememberStreamRtspAddress"
                 />
                 <button
                   @click="toggleStream"
@@ -4478,6 +4559,3 @@ watch(
     </teleport>
   </div>
 </template>
-
-
-

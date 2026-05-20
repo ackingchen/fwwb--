@@ -8,6 +8,7 @@ import {
 const TARGET_QUERY_TIMEOUT = 4000;
 const TARGET_QUERY_INTERVAL = 80;
 const SCROLL_SETTLE_DELAY = 220;
+const GUIDE_REPLAY_EVENT = "uav-guide:replay";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,6 +22,25 @@ async function waitForTargetElement(selector) {
     await sleep(TARGET_QUERY_INTERVAL);
   }
   return document.querySelector(selector);
+}
+
+async function resolveTargetWithEnsure(step) {
+  if (!step?.selector) return null;
+  let target = await waitForTargetElement(step.selector);
+  if (target) return target;
+
+  const ensureSelector = String(step?.ensureSelector ?? "").trim();
+  if (!ensureSelector) return null;
+
+  const ensureElement = document.querySelector(ensureSelector);
+  if (ensureElement && typeof ensureElement.click === "function") {
+    ensureElement.click();
+    await nextTick();
+    await sleep(140);
+  }
+
+  target = await waitForTargetElement(step.selector);
+  return target || null;
 }
 
 function readRectFromElement(element) {
@@ -97,7 +117,7 @@ export function useOnboardingGuide({ route, router, isAuthRoute }) {
       const step = currentStep.value;
       await ensureStepRoute(step);
       await nextTick();
-      const target = await waitForTargetElement(step.selector);
+      const target = await resolveTargetWithEnsure(step);
       if (!isGuideVisible.value || token !== resolveToken) return;
 
       if (!target) {
@@ -174,6 +194,18 @@ export function useOnboardingGuide({ route, router, isAuthRoute }) {
     finishGuide();
   }
 
+  function handleReplayGuideRequest(event) {
+    if (isAuthRoute.value || totalSteps === 0) return;
+    autoCheckDone.value = true;
+    stopGuide();
+    const openIntroFirst = event?.detail?.openIntroFirst !== false;
+    if (openIntroFirst) {
+      openGuideIntro();
+      return;
+    }
+    startGuide();
+  }
+
   function onWindowChanged() {
     updateTargetRect();
   }
@@ -217,6 +249,7 @@ export function useOnboardingGuide({ route, router, isAuthRoute }) {
     maybeStartGuide();
     window.addEventListener("resize", onWindowChanged);
     window.addEventListener("scroll", onWindowChanged, true);
+    window.addEventListener(GUIDE_REPLAY_EVENT, handleReplayGuideRequest);
   });
 
   onUnmounted(() => {
@@ -224,6 +257,7 @@ export function useOnboardingGuide({ route, router, isAuthRoute }) {
     clearCurrentTarget();
     window.removeEventListener("resize", onWindowChanged);
     window.removeEventListener("scroll", onWindowChanged, true);
+    window.removeEventListener(GUIDE_REPLAY_EVENT, handleReplayGuideRequest);
   });
 
   return {

@@ -534,7 +534,7 @@ describe("DashboardView", () => {
     vi.useRealTimers();
   });
 
-  it("sends task payload and periodic snapshot command for stream websocket", async () => {
+  it("sends stream task payload without periodic snapshot command", async () => {
     vi.useFakeTimers();
     const originalWebSocket = global.WebSocket;
     const wsInstances = [];
@@ -579,7 +579,7 @@ describe("DashboardView", () => {
         return false;
       }
     });
-    expect(hasStreamSnapshot).toBe(true);
+    expect(hasStreamSnapshot).toBe(false);
 
     wrapper.unmount();
     global.WebSocket = originalWebSocket;

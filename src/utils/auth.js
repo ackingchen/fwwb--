@@ -7,6 +7,8 @@ export const AUTH_ENDPOINTS = Object.freeze({
   logout: "/api/auth/logout",
 });
 export const AUTH_SESSION_KEY = "uav_auth_session_v1";
+export const AUTH_LOGIN_HISTORY_KEY = "uav_login_history_v1";
+const LOGIN_HISTORY_LIMIT = 30;
 
 const authHttp = axios.create({
   withCredentials: true,
@@ -25,6 +27,45 @@ function getStorage() {
   } catch {
     return null;
   }
+}
+
+function readLoginHistoryFromStorage() {
+  const storage = getStorage();
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(AUTH_LOGIN_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLoginHistoryToStorage(list) {
+  const storage = getStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(AUTH_LOGIN_HISTORY_KEY, JSON.stringify(list));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function appendLoginHistory({ account, status = "success", ip = "--", location = "--" }) {
+  const normalizedAccount = toTrimmedText(account) || "--";
+  const record = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    time: new Date().toLocaleString("zh-CN", { hour12: false }),
+    account: normalizedAccount,
+    ip: toTrimmedText(ip) || "--",
+    location: toTrimmedText(location) || "--",
+    status: status === "success" ? "success" : "failed",
+  };
+
+  const history = readLoginHistoryFromStorage();
+  const next = [record, ...history].slice(0, LOGIN_HISTORY_LIMIT);
+  writeLoginHistoryToStorage(next);
 }
 
 function toTrimmedText(value) {
@@ -131,6 +172,24 @@ export function clearAuthSession() {
   setSession(null);
 }
 
+export function updateAuthProfile({ displayName, username } = {}) {
+  const current = SESSION_STATE.user || readSessionFromStorage();
+  if (!current) return null;
+
+  const normalizedDisplayName = toTrimmedText(displayName);
+  const normalizedUsername = toTrimmedText(username);
+
+  const next = { ...current };
+  if (normalizedDisplayName) next.displayName = normalizedDisplayName;
+  if (normalizedUsername) next.username = normalizedUsername;
+
+  return setSession(next);
+}
+
+export function getLoginHistory() {
+  return readLoginHistoryFromStorage();
+}
+
 export async function fetchAuthSession({ force = false } = {}) {
   if (SESSION_STATE.loaded && !force) {
     return getAuthSession();
@@ -206,6 +265,7 @@ export async function loginWithBackend({ account, password }) {
         email: "",
         displayName: normalizedAccount,
       });
+    appendLoginHistory({ account: user?.username || normalizedAccount, status: "success" });
 
     return {
       user,
@@ -222,6 +282,7 @@ export async function loginWithBackend({ account, password }) {
       email: "",
       displayName: normalizedAccount,
     });
+    appendLoginHistory({ account: user?.username || normalizedAccount, status: "success" });
     return {
       user,
       data: {

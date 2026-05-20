@@ -1055,6 +1055,19 @@ function getStatusText(status) {
   return statusLabel[status] || textOrDash(status);
 }
 
+function getTaskTypeClass(task) {
+  const taskType = Number(task?.taskType);
+  if (taskType === 0) return 'type-pill-image';
+  if (taskType === 1) return 'type-pill-video';
+  if (taskType === 2) return 'type-pill-stream';
+
+  const label = String(task?.taskTypeLabel ?? '').trim();
+  if (label.includes('图片')) return 'type-pill-image';
+  if (label.includes('视频')) return 'type-pill-video';
+  if (label.includes('实时流')) return 'type-pill-stream';
+  return 'type-pill-default';
+}
+
 function numberOrDash(value, digits = 1, suffix = '') {
   if (value === null || value === undefined || value === '') return '--';
   const num = Number(value);
@@ -1366,14 +1379,6 @@ function isCrossOriginImageUrl(rawUrl) {
     return parsed.origin !== window.location.origin;
   } catch {
     return false;
-  }
-}
-
-function clearTaskSummaryFromStorage() {
-  try {
-    localStorage.removeItem(DASHBOARD_TASK_SUMMARY_KEY);
-  } catch {
-    // Ignore storage remove failures
   }
 }
 
@@ -1819,26 +1824,6 @@ function confirmAddTask() {
   currentPage.value = 1;
 }
 
-// 切换任务状态
-function toggleStatus(task, e) {
-  e.stopPropagation();
-  showStatusMenu.value = showStatusMenu.value === task.id ? null : task.id;
-}
-
-const showStatusMenu = ref(null);
-
-function setStatus(task, status, e) {
-  e.stopPropagation();
-  task.status = 'finished';
-  clearTaskSummaryFromStorage();
-  showStatusMenu.value = null;
-}
-
-// 点击其他地方关闭状态菜单
-function closeStatusMenu() {
-  showStatusMenu.value = null;
-}
-
 // 刷新（重置搜索和分页）
 function refreshTasks() {
   searchQuery.value = '';
@@ -1892,9 +1877,6 @@ async function deleteTask(task, e) {
 
     tasksError.value = '';
     tasks.value = tasks.value.filter((item) => getTaskIdentity(item) !== taskId);
-    if (showStatusMenu.value === task.id) {
-      showStatusMenu.value = null;
-    }
     if (detailSourceTask.value && getTaskIdentity(detailSourceTask.value) === taskId) {
       closeDetailDialog();
     }
@@ -1936,7 +1918,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="panel tasks-panel" @click="closeStatusMenu">
+  <section class="panel tasks-panel">
     <div class="panel-header">
       <h3>历史任务</h3>
       <div class="header-actions">
@@ -2002,24 +1984,15 @@ onUnmounted(() => {
           >
             <td>{{ task.taskId }}</td>
             <td>{{ task.name }}</td>
-            <td>{{ task.taskTypeLabel }}</td>
+            <td>
+              <span :class="['type-pill', getTaskTypeClass(task)]">{{ task.taskTypeLabel }}</span>
+            </td>
             <td>{{ task.source }}</td>
             <td>{{ task.taskTime || task.createdAt }}</td>
             <td>{{ task.targetCount }}</td>
             <td class="status-cell">
-              <div class="status-wrapper" @click="toggleStatus(task, $event)">
+              <div class="status-wrapper">
                 <span :class="['pill', task.status]">{{ statusLabel[task.status] || task.status }}</span>
-                <svg class="status-arrow" viewBox="0 0 12 12" width="10" height="10">
-                  <path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/>
-                </svg>
-                <!-- 状态下拉菜单 -->
-                <div class="status-dropdown" v-if="showStatusMenu === task.id" @click.stop>
-                  <div
-                    class="status-option finished"
-                    :class="{ current: task.status === 'finished' }"
-                    @click="setStatus(task, 'finished', $event)"
-                  >已完成</div>
-                </div>
               </div>
             </td>
             <td class="op-cell">
@@ -2408,6 +2381,44 @@ onUnmounted(() => {
   position: relative;
 }
 
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.type-pill-image {
+  color: #8ee2ff;
+  background: rgba(66, 174, 255, 0.16);
+  border-color: rgba(66, 174, 255, 0.42);
+}
+
+.type-pill-video {
+  color: #ffd690;
+  background: rgba(255, 177, 76, 0.16);
+  border-color: rgba(255, 177, 76, 0.42);
+}
+
+.type-pill-stream {
+  color: #9dffcf;
+  background: rgba(52, 211, 153, 0.16);
+  border-color: rgba(52, 211, 153, 0.42);
+}
+
+.type-pill-default {
+  color: #cfd7ee;
+  background: rgba(207, 215, 238, 0.14);
+  border-color: rgba(207, 215, 238, 0.35);
+}
+
 .op-cell {
   white-space: nowrap;
 }
@@ -2423,58 +2434,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  cursor: pointer;
   position: relative;
-}
-
-.status-arrow {
-  color: var(--text-dim);
-  transition: transform 0.2s;
-}
-
-.status-wrapper:hover .status-arrow {
-  color: var(--primary);
-}
-
-.status-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
-  background: #1e1e2e;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  z-index: 100;
-  min-width: 110px;
-  overflow: hidden;
-  backdrop-filter: blur(12px);
-}
-
-.status-option {
-  padding: 9px 16px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s;
-  color: #ccc;
-}
-
-.status-option:hover {
-  background: rgba(79, 149, 255, 0.15);
-}
-
-.status-option.current {
-  font-weight: 600;
-}
-
-.status-option.running,
-.status-option.current.running {
-  color: var(--cyan, #00d4ff);
-}
-
-.status-option.finished,
-.status-option.current.finished {
-  color: #aaa;
 }
 
 /* 分页 */
@@ -2967,6 +2927,3 @@ onUnmounted(() => {
   opacity: 0;
 }
 </style>
-
-
-

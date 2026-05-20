@@ -481,8 +481,26 @@ onMounted(async () => {
 
 .intro-card h3 {
   margin: 0;
+  position: relative;
+  display: inline-block;
+  padding-bottom: 7px;
   font-size: 15px;
   color: #edf7ff;
+}
+
+.intro-card h3::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #66b0ff 0%, #7af6df 52%, #6ca9ff 100%);
+  box-shadow:
+    0 0 6px rgba(102, 176, 255, 0.95),
+    0 0 12px rgba(122, 246, 223, 0.62);
+  animation: neonLinePulse 2.2s ease-in-out infinite;
 }
 
 .intro-card p {
@@ -754,6 +772,22 @@ onMounted(async () => {
   }
   100% {
     transform: translateX(52%) rotate(0deg);
+  }
+}
+
+@keyframes neonLinePulse {
+  0%,
+  100% {
+    opacity: 0.92;
+    box-shadow:
+      0 0 6px rgba(102, 176, 255, 0.95),
+      0 0 12px rgba(122, 246, 223, 0.62);
+  }
+  50% {
+    opacity: 1;
+    box-shadow:
+      0 0 8px rgba(120, 188, 255, 1),
+      0 0 16px rgba(130, 255, 229, 0.82);
   }
 }
 
